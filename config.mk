@@ -7,16 +7,12 @@ VERSION = 0.7
 PREFIX = /usr/local
 MANPREFIX = ${PREFIX}/share/man
 
-X11INC = /usr/X11R6/include
-X11LIB = /usr/X11R6/lib
+PKGCFG = wayland-client wayland-cursor xkbcommon wld
+XDG_SHELL_PROTO = `pkg-config --variable=pkgdatadir wayland-protocols`/stable/xdg-shell/xdg-shell.xml
 
 # includes and libs
-INCS = -I. -I/usr/include -I${X11INC} \
-       `pkg-config --cflags fontconfig` \
-       `pkg-config --cflags freetype2`
-LIBS = -L/usr/lib -lc -L${X11LIB} -lm -lrt -lX11 -lutil -lXft \
-       `pkg-config --libs fontconfig`  \
-       `pkg-config --libs freetype2`
+INCS = -I. -I/usr/include `pkg-config --cflags ${PKGCFG}`
+LIBS = -L/usr/lib -lc -lm -lrt -lutil `pkg-config --libs ${PKGCFG}`
 
 # flags
 CPPFLAGS = -DVERSION=\"${VERSION}\" -D_XOPEN_SOURCE=600
