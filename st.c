@@ -3159,16 +3159,32 @@ wlclear(int x1, int y1, int x2, int y2)
 int
 wlloadfont(Font *f, FcPattern *pattern)
 {
+	FcPattern *configured;
 	FcPattern *match;
 	FcResult result;
 	struct wld_extents extents;
 	int wantattr, haveattr;
 
-	match = FcFontMatch(NULL, pattern, &result);
-	if (!match)
+	/*
+	 * Manually configure instead of calling XftMatchFont
+	 * so that we can use the configured pattern for
+	 * "missing glyph" lookups.
+	 */
+	configured = FcPatternDuplicate(pattern);
+	if (!configured)
 		return 1;
 
+	FcConfigSubstitute(NULL, configured, FcMatchPattern);
+	FcDefaultSubstitute(configured);
+
+	match = FcFontMatch(NULL, configured, &result);
+	if (!match) {
+		FcPatternDestroy(configured);
+		return 1;
+	}
+
 	if (!(f->match = wld_font_open_pattern(wld.fontctx, match))) {
+		FcPatternDestroy(configured);
 		FcPatternDestroy(match);
 		return 1;
 	}
@@ -3199,7 +3215,7 @@ wlloadfont(Font *f, FcPattern *pattern)
 	wld_font_text_extents(f->match, ascii_printable, &extents);
 
 	f->set = NULL;
-	f->pattern = FcPatternDuplicate(pattern);
+	f->pattern = configured;
 
 	f->ascent = f->match->ascent;
 	f->descent = f->match->descent;
@@ -3261,9 +3277,6 @@ wlloadfonts(char *fontstr, double fontsize)
 	if (usedfontsize < 0) {
 		FcPatternGetDouble(dc.font.pattern,
 		                   FC_PIXEL_SIZE, 0, &fontval);
-		FcPatternAddDouble(pattern, FC_PIXEL_SIZE, fontval);
-		if (wlloadfont(&dc.font, pattern))
-			die("st: can't open font %s\n", fontstr);
 		usedfontsize = fontval;
 		if (fontsize == 0)
 			defaultfontsize = fontval;
@@ -4537,7 +4550,7 @@ run:
 			opt_title = basename(xstrdup(argv[0]));
 	}
 	setlocale(LC_CTYPE, "");
-	tnew(80, 24);
+	tnew(MAX(cols, 1), MAX(rows, 1));
 	wlinit();
 	selinit();
 	run();
