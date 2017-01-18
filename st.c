@@ -34,7 +34,7 @@
 
 #include "arg.h"
 #include "xdg-shell-unstable-v5-client-protocol.h"
-
+#include "base64dec.c"
 char *argv0;
 
 #if   defined(__linux)
@@ -289,6 +289,7 @@ typedef struct {
 	char state; /* focus, redraw, visible */
 	int cursor; /* cursor style */
 	struct wl_callback * framecb;
+	uint32_t globalserial; /*global event serial*/
 } Wayland;
 
 typedef struct {
@@ -2374,6 +2375,15 @@ strhandle(void)
 				break;
 			p = strescseq.args[2];
 			/* FALLTHROUGH */
+		case 52:
+			if (narg > 2){
+				char *src=strescseq.args[2];
+				size_t l = (strlen(src)/4)*3;
+				char *buf=xmalloc(l+1);
+				base64dec(buf, src, l);
+				wlsetsel(buf, wl.globalserial);
+			}
+			return;
 		case 104: /* color reset, here p = NULL */
 			j = (narg > 1) ? atoi(strescseq.args[1]) : -1;
 			if (wlsetcolorname(j, p)) {
@@ -4067,6 +4077,7 @@ kbdkey(void *data, struct wl_keyboard *keyboard, uint32_t serial, uint32_t time,
 		return;
 
 	if (state == WL_KEYBOARD_KEY_STATE_RELEASED) {
+		wl.globalserial=serial;
 		if (repeat.key == key)
 			repeat.len = 0;
 		return;
@@ -4222,6 +4233,7 @@ ptrbutton(void * data, struct wl_pointer * pointer, uint32_t serial,
 		if (button == BTN_MIDDLE) {
 			selpaste(NULL);
 		} else if (button == BTN_LEFT) {
+			wl.globalserial=serial;
 			if (sel.mode == SEL_READY) {
 				getbuttoninfo();
 				selcopy(serial);
