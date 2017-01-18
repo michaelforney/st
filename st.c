@@ -289,6 +289,7 @@ typedef struct {
 	char state; /* focus, redraw, visible */
 	int cursor; /* cursor style */
 	struct wl_callback * framecb;
+	uint32_t globalserial; /* global event serial */
 } Wayland;
 
 typedef struct {
@@ -550,6 +551,7 @@ static size_t utf8encode(Rune, char *);
 static char utf8encodebyte(Rune, size_t);
 static char *utf8strchr(char *s, Rune u);
 static size_t utf8validate(Rune *, size_t);
+static size_t base64dec(void *, const char *, size_t);
 
 static ssize_t xwrite(int, const char *, size_t);
 static void *xmalloc(size_t);
@@ -758,6 +760,55 @@ utf8validate(Rune *u, size_t i)
 		;
 
 	return i;
+}
+
+/* taken from libulz with permission */
+size_t
+base64dec(void *dst, const char *src, size_t dst_len)
+{
+	static const char base64_tbl[64] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+	const char *s = src;
+	unsigned char *d = dst;
+	size_t l = dst_len, o = 0;
+	int n = 0, cnt = 0, skip = 0, p;
+
+	if (!l)
+		return 0;
+	for (;;) {
+		if (*s == '=') {
+			skip++;
+			if (skip > 2)
+				return 0;
+			p = 0;
+		} else if (!*s) {
+			if (cnt % 4 != 0 || !l)
+				return 0;
+			*d++ = 0;
+			return o;
+		} else if (skip) {
+			return 0;
+		} else {
+			for (p = 0; p < 64; p++) {
+				if (base64_tbl[p] == *s)
+					goto decode;
+			}
+			return 0;
+		}
+	decode:
+		n = (n << 6) | p;
+		cnt++;
+		if (cnt % 4 == 0) {
+			if (l < 3)
+				return 0;
+			*d++ = n >> 16;
+			*d++ = n >> 8 & 0xff;
+			*d++ = n & 0xff;
+			l -= 3;
+			o += 3-skip;
+			n = 0;
+		}
+		s++;
+	}
 }
 
 void
@@ -2353,7 +2404,8 @@ csireset(void)
 void
 strhandle(void)
 {
-	char *p = NULL;
+	char *p = NULL, *buf;
+	size_t l;
 	int j, narg, par;
 
 	term.esc &= ~(ESC_STR_END|ESC_STR);
@@ -2368,6 +2420,15 @@ strhandle(void)
 		case 2:
 			if (narg > 1)
 				wlsettitle(strescseq.args[1]);
+			return;
+		case 52: /* tmux clipboard set */
+			if (narg > 2) {
+				p = strescseq.args[2];
+				l = (strlen(p) / 4) * 3;
+				buf = xmalloc(l + 1);
+				base64dec(buf, p, l);
+				wlsetsel(buf, wl.globalserial);
+			}
 			return;
 		case 4: /* color set */
 			if (narg < 3)
@@ -4072,6 +4133,7 @@ kbdkey(void *data, struct wl_keyboard *keyboard, uint32_t serial, uint32_t time,
 		return;
 	}
 
+	wl.globalserial = serial;
 	ksym = xkb_state_key_get_one_sym(wl.xkb.state, key + 8);
 	len = xkb_keysym_to_utf8(ksym, buf, sizeof buf);
 	if (len > 0)
@@ -4222,6 +4284,7 @@ ptrbutton(void * data, struct wl_pointer * pointer, uint32_t serial,
 		if (button == BTN_MIDDLE) {
 			selpaste(NULL);
 		} else if (button == BTN_LEFT) {
+			wl.globalserial = serial;
 			if (sel.mode == SEL_READY) {
 				getbuttoninfo();
 				selcopy(serial);
