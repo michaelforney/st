@@ -2370,11 +2370,6 @@ strhandle(void)
 			if (narg > 1)
 				wlsettitle(strescseq.args[1]);
 			return;
-		case 4: /* color set */
-			if (narg < 3)
-				break;
-			p = strescseq.args[2];
-			/* FALLTHROUGH */
 		case 52:
 			if (narg > 2){
 				char *src=strescseq.args[2];
@@ -2384,6 +2379,12 @@ strhandle(void)
 				wlsetsel(buf, wl.globalserial);
 			}
 			return;
+		case 4: /* color set */
+			if (narg < 3)
+				break;
+			p = strescseq.args[2];
+			/* FALLTHROUGH */
+
 		case 104: /* color reset, here p = NULL */
 			j = (narg > 1) ? atoi(strescseq.args[1]) : -1;
 			if (wlsetcolorname(j, p)) {
