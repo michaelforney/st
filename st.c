@@ -289,7 +289,7 @@ typedef struct {
 	char state; /* focus, redraw, visible */
 	int cursor; /* cursor style */
 	struct wl_callback * framecb;
-	uint32_t globalserial; /*global event serial*/
+	uint32_t globalserial; /* global event serial */
 } Wayland;
 
 typedef struct {
@@ -2370,11 +2370,11 @@ strhandle(void)
 			if (narg > 1)
 				wlsettitle(strescseq.args[1]);
 			return;
-		case 52:
-			if (narg > 2){
-				char *src=strescseq.args[2];
+		case 52: /* tmux clipboard set */
+			if (narg > 2) {
+				char *src = strescseq.args[2];
 				size_t l = (strlen(src)/4)*3;
-				char *buf=xmalloc(l+1);
+				char *buf = xmalloc(l+1);
 				base64dec(buf, src, l);
 				wlsetsel(buf, wl.globalserial);
 			}
@@ -4078,7 +4078,7 @@ kbdkey(void *data, struct wl_keyboard *keyboard, uint32_t serial, uint32_t time,
 		return;
 
 	if (state == WL_KEYBOARD_KEY_STATE_RELEASED) {
-		wl.globalserial=serial;
+		wl.globalserial = serial;
 		if (repeat.key == key)
 			repeat.len = 0;
 		return;
@@ -4234,7 +4234,7 @@ ptrbutton(void * data, struct wl_pointer * pointer, uint32_t serial,
 		if (button == BTN_MIDDLE) {
 			selpaste(NULL);
 		} else if (button == BTN_LEFT) {
-			wl.globalserial=serial;
+			wl.globalserial = serial;
 			if (sel.mode == SEL_READY) {
 				getbuttoninfo();
 				selcopy(serial);
