@@ -4077,8 +4077,12 @@ kbdkey(void *data, struct wl_keyboard *keyboard, uint32_t serial, uint32_t time,
 	if (IS_SET(MODE_KBDLOCK))
 		return;
 
-	if (state == WL_KEYBOARD_KEY_STATE_RELEASED) {
+	if (state == WL_KEYBOARD_KEY_STATE_PRESSED) {
 		wl.globalserial = serial;
+		return;
+	}
+	
+	if (state == WL_KEYBOARD_KEY_STATE_RELEASED) {
 		if (repeat.key == key)
 			repeat.len = 0;
 		return;
