@@ -8,7 +8,7 @@ PREFIX = /usr/local
 MANPREFIX = ${PREFIX}/share/man
 
 PKGCFG = fontconfig wayland-client wayland-cursor xkbcommon wld
-XDG_SHELL_PROTO = `pkg-config --variable=pkgdatadir wayland-protocols`/unstable/xdg-shell/xdg-shell-unstable-v5.xml
+XDG_SHELL_PROTO = `pkg-config --variable=pkgdatadir wayland-protocols`/unstable/xdg-shell/xdg-shell-unstable-v6.xml
 
 # includes and libs
 INCS = -I. -I/usr/include `pkg-config --cflags ${PKGCFG}`
