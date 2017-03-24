@@ -4,7 +4,7 @@ VERSION = 0.7
 # Customize below to fit your system
 
 # paths
-PREFIX = /usr/local
+PREFIX = /usr
 MANPREFIX = ${PREFIX}/share/man
 
 PKGCFG = fontconfig wayland-client wayland-cursor xkbcommon wld
