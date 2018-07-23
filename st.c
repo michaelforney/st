@@ -3421,6 +3421,8 @@ wlinit(void)
 	zxdg_toplevel_v6_add_listener(wl.xdgtoplevel, &xdgtoplevellistener,
 		NULL);
 
+	wl_surface_commit(wl.surface);
+
 	wl.xkb.ctx = xkb_context_new(0);
 	wlresettitle();
 }
