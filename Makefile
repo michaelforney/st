@@ -39,7 +39,7 @@ st: ${OBJ}
 
 clean:
 	@echo cleaning
-	@rm -f st ${OBJ} st-${VERSION}.tar.gz
+	@rm -f st ${OBJ} st-${VERSION}.tar.gz xdg-shell-protocol.c xdg-shell-client-protocol.h
 
 dist: clean
 	@echo creating dist tarball
