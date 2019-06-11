@@ -1071,7 +1071,7 @@ getsel(void)
 		 * The best solution seems like to produce '\n' when
 		 * something is copied from st and convert '\n' to
 		 * '\r', when something to be pasted is received by
-		 * st.
+		 * st-wl.
 		 * FIXME: Fix the computer world.
 		 */
 		if ((y < sel.ne.y || lastx >= linelen) && !(last->mode & ATTR_WRAP))
@@ -2890,7 +2890,7 @@ tputc(Rune u)
 		if (strescseq.len+len >= sizeof(strescseq.buf)-1) {
 			/*
 			 * Here is a bug in terminals. If the user never sends
-			 * some code to stop the str or esc command, then st
+			 * some code to stop the str or esc command, then st-wl
 			 * will stop responding. But this is better than
 			 * silently failing with unknown characters. At least
 			 * then users will report back.
@@ -3203,7 +3203,7 @@ wlloadfont(Font *f, FcPattern *pattern)
 		if ((FcPatternGetInteger(match, "slant", 0,
 		    &haveattr) != FcResultMatch) || haveattr < wantattr) {
 			f->badslant = 1;
-			fputs("st: font slant does not match\n", stderr);
+			fputs("st-wl: font slant does not match\n", stderr);
 		}
 	}
 
@@ -3212,7 +3212,7 @@ wlloadfont(Font *f, FcPattern *pattern)
 		if ((FcPatternGetInteger(match, "weight", 0,
 		    &haveattr) != FcResultMatch) || haveattr != wantattr) {
 			f->badweight = 1;
-			fputs("st: font weight does not match\n", stderr);
+			fputs("st-wl: font weight does not match\n", stderr);
 		}
 	}
 
@@ -3248,7 +3248,7 @@ wlloadfonts(char *fontstr, double fontsize)
 	}
 
 	if (!pattern)
-		die("st: can't open font %s\n", fontstr);
+		die("st-wl: can't open font %s\n", fontstr);
 
 	if (fontsize > 1) {
 		FcPatternDel(pattern, FC_PIXEL_SIZE);
@@ -3277,7 +3277,7 @@ wlloadfonts(char *fontstr, double fontsize)
 	FcDefaultSubstitute(pattern);
 
 	if (wlloadfont(&dc.font, pattern))
-		die("st: can't open font %s\n", fontstr);
+		die("st-wl: can't open font %s\n", fontstr);
 
 	if (usedfontsize < 0) {
 		FcPatternGetDouble(dc.font.pattern,
@@ -3294,17 +3294,17 @@ wlloadfonts(char *fontstr, double fontsize)
 	FcPatternDel(pattern, FC_SLANT);
 	FcPatternAddInteger(pattern, FC_SLANT, FC_SLANT_ITALIC);
 	if (wlloadfont(&dc.ifont, pattern))
-		die("st: can't open font %s\n", fontstr);
+		die("st-wl: can't open font %s\n", fontstr);
 
 	FcPatternDel(pattern, FC_WEIGHT);
 	FcPatternAddInteger(pattern, FC_WEIGHT, FC_WEIGHT_BOLD);
 	if (wlloadfont(&dc.ibfont, pattern))
-		die("st: can't open font %s\n", fontstr);
+		die("st-wl: can't open font %s\n", fontstr);
 
 	FcPatternDel(pattern, FC_SLANT);
 	FcPatternAddInteger(pattern, FC_SLANT, FC_SLANT_ROMAN);
 	if (wlloadfont(&dc.bfont, pattern))
-		die("st: can't open font %s\n", fontstr);
+		die("st-wl: can't open font %s\n", fontstr);
 
 	FcPatternDestroy(pattern);
 }
@@ -3740,7 +3740,7 @@ wldrawcursor(void)
 	/* draw the new one */
 	if (wl.state & WIN_FOCUSED) {
 		switch (wl.cursor) {
-		case 7: /* st extension: snowman */
+		case 7: /* st-wl extension: snowman */
 			utf8decode("☃", &g.u, UTF_SIZ);
 		case 0: /* Blinking Block */
 		case 1: /* Blinking Block (Default) */
@@ -3796,7 +3796,7 @@ wlsettitle(char *title)
 void
 wlresettitle(void)
 {
-	wlsettitle(opt_title ? opt_title : "st");
+	wlsettitle(opt_title ? opt_title : "st-wl");
 }
 
 void
@@ -4562,7 +4562,7 @@ main(int argc, char *argv[])
 		opt_embed = EARGF(usage());
 		break;
 	case 'v':
-		die("%s " VERSION " (c) 2010-2016 st engineers\n", argv0);
+		die("%s " VERSION " (c) 2010-2016 st-wl engineers\n", argv0);
 		break;
 	default:
 		usage();

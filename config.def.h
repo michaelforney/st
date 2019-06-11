@@ -9,7 +9,7 @@ static char font[] = "Liberation Mono:pixelsize=12:antialias=true:autohint=true"
 static int borderpx = 2;
 
 /*
- * What program is execed by st depends of these precedence rules:
+ * What program is execed by st-wl depends of these precedence rules:
  * 1: program passed with -e
  * 2: utmp option
  * 3: SHELL environment variable
@@ -65,14 +65,14 @@ static unsigned int cursorthickness = 2;
  */
 
 /* default TERM value */
-static char termname[] = "st-256color";
+static char termname[] = "st-wl-256color";
 
 /*
  * spaces per tab
  *
  * When you are changing this value, don't forget to adapt the »it« value in
- * the st.info and appropriately install the st.info in the environment where
- * you use this st version.
+ * the st-wl.info and appropriately install the st-wl.info in the environment
+ * where you use this st-wl version.
  *
  *	it#$tabspaces,
  *
@@ -183,7 +183,7 @@ static Shortcut shortcuts[] = {
 };
 
 /*
- * Special keys (change & recompile st.info accordingly)
+ * Special keys (change & recompile st-wl.info accordingly)
  *
  * Mask value:
  * * Use MOD_MASK_ANY to match the key no matter modifiers state
@@ -202,7 +202,7 @@ static Shortcut shortcuts[] = {
  * * > 0: crlf mode is enabled
  * * < 0: crlf mode is disabled
  *
- * Be careful with the order of the definitions because st searches in
+ * Be careful with the order of the definitions because st-wl searches in
  * this table sequentially, so any MOD_MASK_ANY must be in the last
  * position for a key.
  */
