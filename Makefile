@@ -3,7 +3,7 @@
 
 include config.mk
 
-SRC = st-wl.c xdg-shell-protocol.c
+SRC = st-wl.c wl.c xdg-shell-protocol.c
 OBJ = ${SRC:.c=.o}
 
 all: options st-wl
@@ -25,11 +25,12 @@ xdg-shell-client-protocol.h:
 	@echo GEN $@
 	@wayland-scanner client-header ${XDG_SHELL_PROTO} $@
 
-st-wl.o: xdg-shell-client-protocol.h
-
 .c.o:
 	@echo CC $<
 	@${CC} -c ${CFLAGS} $<
+
+st-wl.o: st-wl.h xdg-shell-client-protocol.h
+wl.o: st-wl.h xdg-shell-client-protocol.h
 
 ${OBJ}: config.h config.mk
 
