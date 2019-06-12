@@ -276,7 +276,7 @@ typedef struct {
 	struct wl_data_offer *seloffer;
 	struct wl_surface *surface;
 	struct wl_buffer *buffer;
-	struct xdg_wm_base *shell;
+	struct xdg_wm_base *wm;
 	struct xdg_surface *xdgsurface;
 	struct xdg_toplevel *xdgtoplevel;
 	XKB xkb;
@@ -516,9 +516,8 @@ static void ptrbutton(void *, struct wl_pointer *, uint32_t, uint32_t,
 		uint32_t, uint32_t);
 static void ptraxis(void *, struct wl_pointer *, uint32_t, uint32_t,
 		wl_fixed_t);
-static void xdgshellping(void *, struct xdg_wm_base *, uint32_t);
-static void xdgsurfconfigure(void *, struct xdg_surface *,
-		uint32_t);
+static void wmping(void *, struct xdg_wm_base *, uint32_t);
+static void xdgsurfconfigure(void *, struct xdg_surface *, uint32_t);
 static void xdgtoplevelconfigure(void *, struct xdg_toplevel *,
 		int32_t, int32_t, struct wl_array *);
 static void xdgtoplevelclose(void *, struct xdg_toplevel *);
@@ -568,9 +567,8 @@ static struct wl_keyboard_listener kbdlistener =
 	{ kbdkeymap, kbdenter, kbdleave, kbdkey, kbdmodifiers, kbdrepeatinfo };
 static struct wl_pointer_listener ptrlistener =
 	{ ptrenter, ptrleave, ptrmotion, ptrbutton, ptraxis };
-static struct xdg_wm_base_listener xdgshelllistener = { xdgshellping };
-static struct xdg_surface_listener xdgsurflistener =
-	{ xdgsurfconfigure };
+static struct xdg_wm_base_listener wmlistener = { wmping };
+static struct xdg_surface_listener xdgsurflistener = { xdgsurfconfigure };
 static struct xdg_toplevel_listener xdgtoplevellistener =
 	{ xdgtoplevelconfigure, xdgtoplevelclose };
 static struct wl_data_device_listener datadevlistener =
@@ -3386,8 +3384,10 @@ wlinit(void)
 		die("Display has no seat\n");
 	if (!wl.datadevmanager)
 		die("Display has no data device manager\n");
+    if (!wl.wm)
+        die("Display has no window manager\n");
 
-	wl.keyboard = wl_seat_get_keyboard(wl.seat);
+    wl.keyboard = wl_seat_get_keyboard(wl.seat);
 	wl_keyboard_add_listener(wl.keyboard, &kbdlistener, NULL);
 	wl.pointer = wl_seat_get_pointer(wl.seat);
 	wl_pointer_add_listener(wl.pointer, &ptrlistener, NULL);
@@ -3413,15 +3413,13 @@ wlinit(void)
 	wl.surface = wl_compositor_create_surface(wl.cmp);
 	wl_surface_add_listener(wl.surface, &surflistener, NULL);
 
-	wl.xdgsurface = xdg_wm_base_get_xdg_surface(wl.shell, wl.surface);
+	wl.xdgsurface = xdg_wm_base_get_xdg_surface(wl.wm, wl.surface);
 	xdg_surface_add_listener(wl.xdgsurface, &xdgsurflistener, NULL);
 	wl.xdgtoplevel = xdg_surface_get_toplevel(wl.xdgsurface);
-	xdg_toplevel_set_app_id(wl.xdgtoplevel,
-		opt_class ? opt_class : termname);
-	xdg_toplevel_add_listener(wl.xdgtoplevel, &xdgtoplevellistener,
-		NULL);
+    xdg_toplevel_add_listener(wl.xdgtoplevel, &xdgtoplevellistener, NULL);
+    xdg_toplevel_set_app_id(wl.xdgtoplevel, opt_class ? opt_class : termname);
 
-	wl_surface_commit(wl.surface);
+    wl_surface_commit(wl.surface);
 
 	wl.xkb.ctx = xkb_context_new(0);
 	wlresettitle();
@@ -3954,17 +3952,14 @@ regglobal(void *data, struct wl_registry *registry, uint32_t name,
           const char *interface, uint32_t version)
 {
 	if (strcmp(interface, "wl_compositor") == 0) {
-		wl.cmp = wl_registry_bind(registry, name,
-				&wl_compositor_interface, 3);
+		wl.cmp = wl_registry_bind(registry, name, &wl_compositor_interface, 3);
 	} else if (strcmp(interface, "xdg_wm_base") == 0) {
-		wl.shell = wl_registry_bind(registry, name,
-				&xdg_wm_base_interface, 1);
-		xdg_wm_base_add_listener(wl.shell, &xdgshelllistener, NULL);
+		wl.wm = wl_registry_bind(registry, name, &xdg_wm_base_interface, 1);
+		xdg_wm_base_add_listener(wl.wm, &wmlistener, NULL);
 	} else if (strcmp(interface, "wl_shm") == 0) {
 		wl.shm = wl_registry_bind(registry, name, &wl_shm_interface, 1);
 	} else if (strcmp(interface, "wl_seat") == 0) {
-		wl.seat = wl_registry_bind(registry, name,
-				&wl_seat_interface, 4);
+		wl.seat = wl_registry_bind(registry, name, &wl_seat_interface, 4);
 	} else if (strcmp(interface, "wl_data_device_manager") == 0) {
 		wl.datadevmanager = wl_registry_bind(registry, name,
 				&wl_data_device_manager_interface, 1);
@@ -4302,9 +4297,9 @@ ptraxis(void * data, struct wl_pointer * pointer, uint32_t time, uint32_t axis,
 }
 
 void
-xdgshellping(void *data, struct xdg_wm_base *shell, uint32_t serial)
+wmping(void *data, struct xdg_wm_base *wm, uint32_t serial)
 {
-	xdg_wm_base_pong(shell, serial);
+	xdg_wm_base_pong(wm, serial);
 }
 
 void
@@ -4315,12 +4310,12 @@ xdgsurfconfigure(void *data, struct xdg_surface *surf, uint32_t serial)
 
 void
 xdgtoplevelconfigure(void *data, struct xdg_toplevel *toplevel,
-        int32_t w, int32_t h, struct wl_array *states)
+                     int32_t w, int32_t h, struct wl_array *states)
 {
-	if(w == wl.w && h == wl.h)
+	if (w == wl.w && h == wl.h)
 		return;
-	cresize(w,h);
-	if(wl.configured)
+	cresize(w, h);
+	if (wl.configured)
 		ttyresize();
 	else
 		wl.configured = true;
