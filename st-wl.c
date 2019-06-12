@@ -4317,18 +4317,6 @@ void
 xdgtoplevelconfigure(void *data, struct xdg_toplevel *toplevel,
         int32_t w, int32_t h, struct wl_array *states)
 {
-
-	enum xdg_toplevel_state *state;
-	bool visible = 0;
-	wl_array_for_each(state, states) {
-		if(*state == XDG_TOPLEVEL_STATE_ACTIVATED) visible = 1;
-	}
-
-	if(visible)
-		wl.state |= WIN_VISIBLE;
-	else
-		wl.state &= ~WIN_VISIBLE;
-
 	if(w == wl.w && h == wl.h)
 		return;
 	cresize(w,h);
