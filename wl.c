@@ -38,11 +38,16 @@
 
 
 
+#define DRAW_BUF_SIZ  20*1024
+
 /* Macros */
 
 #define DIVCEIL(n, d)       (((n) + ((d) - 1)) / (d))
 #define TIMEDIFF(t1, t2)    ((t1.tv_sec-t2.tv_sec)*1000 + \
                 (t1.tv_nsec-t2.tv_nsec)/1E6)
+#define ATTRCMP(a, b)       ((a).mode != (b).mode || (a).fg != (b).fg || \
+                (a).bg != (b).bg)
+
 #define IS_TRUECOL(x)       (1 << 24 & (x))
 
 
@@ -77,11 +82,17 @@ typedef struct {
     struct wl_surface *surface;
 } Cursor;
 
+typedef struct {
+    struct wld_context *ctx;
+    struct wld_font_context *fontctx;
+    struct wld_renderer *renderer;
+    struct wld_buffer *buffer, *oldbuffer;
+} WLD;
+
 
 
 /* Function declarations */
 static void run(void);
-static inline int match(uint, uint);
 
 static void kbdkeymap(void *, struct wl_keyboard *, uint32_t, int32_t, uint32_t);
 static void kbdenter(void *, struct wl_keyboard *, uint32_t,
@@ -94,8 +105,6 @@ static void kbdmodifiers(void *, struct wl_keyboard *, uint32_t, uint32_t,
                 uint32_t, uint32_t, uint32_t);
 static void kbdrepeatinfo(void *, struct wl_keyboard *, int32_t, int32_t);
 
-static int x2col(int);
-static int y2row(int);
 static void ptrenter(void *, struct wl_pointer *, uint32_t, struct wl_surface *,
                 wl_fixed_t, wl_fixed_t);
 static void ptrleave(void *, struct wl_pointer *, uint32_t,
@@ -107,12 +116,17 @@ static void ptrbutton(void *, struct wl_pointer *, uint32_t, uint32_t,
 static void ptraxis(void *, struct wl_pointer *, uint32_t, uint32_t,
                 wl_fixed_t);
 static void wlloadcursor(void);
+static void wlsetsel(char*, uint32_t);
+
+
 
 static inline uchar sixd_to_8bit(int);
 static int wlloadfont(Font *, FcPattern *);
 static void wlunloadfont(Font *f);
 static void wldrawglyph(Glyph, int, int);
 static void wlclear(int, int, int, int);
+static void drawregion(int, int, int, int);
+
 
 static void regglobal(void *, struct wl_registry *, uint32_t, const char *,
                 uint32_t);
@@ -125,9 +139,24 @@ static void xdgtoplevelconfigure(void *, struct xdg_toplevel *,
                 int32_t, int32_t, struct wl_array *);
 static void xdgtoplevelclose(void *, struct xdg_toplevel *);
 
+static void datadevoffer(void *, struct wl_data_device *,
+        struct wl_data_offer *);
+static void datadeventer(void *, struct wl_data_device *, uint32_t,
+        struct wl_surface *, wl_fixed_t, wl_fixed_t, struct wl_data_offer *);
+static void datadevleave(void *, struct wl_data_device *);
+static void datadevmotion(void *, struct wl_data_device *, uint32_t,
+        wl_fixed_t x, wl_fixed_t y);
+static void datadevdrop(void *, struct wl_data_device *);
+static void datadevselection(void *, struct wl_data_device *,
+        struct wl_data_offer *);
+static void dataofferoffer(void *, struct wl_data_offer *, const char *);
+static void datasrctarget(void *, struct wl_data_source *, const char *);
+static void datasrcsend(void *, struct wl_data_source *, const char *, int32_t);
+static void datasrccancelled(void *, struct wl_data_source *);
 
 
 /* Globals */
+static struct wl_callback_listener framelistener = { framedone };
 static struct wl_registry_listener reglistener = { regglobal, regglobalremove };
 static struct wl_surface_listener surflistener = { surfenter, surfleave };
 static struct wl_keyboard_listener kbdlistener =
@@ -141,8 +170,12 @@ static struct xdg_toplevel_listener xdgtoplevellistener =
 static struct wl_data_device_listener datadevlistener =
     { datadevoffer, datadeventer, datadevleave, datadevmotion, datadevdrop,
       datadevselection };
+static struct wl_data_source_listener datasrclistener =
+      { datasrctarget, datasrcsend, datasrccancelled };
+static struct wl_data_offer_listener dataofferlistener = { dataofferoffer };
 
 static DC dc;
+static WLD wld;
 static Cursor cursor;
 static int oldbutton   = 3; /* button event on startup: 3 = release */
 static int oldx, oldy;
@@ -225,52 +258,6 @@ kbdleave(void *data, struct wl_keyboard *keyboard, uint32_t serial,
     needdraw = true;
     /* disable key repeat */
     repeat.len = 0;
-}
-
-int
-match(uint mask, uint state)
-{
-    return mask == MOD_MASK_ANY || mask == (state & ~(ignoremod));
-}
-
-char*
-kmap(xkb_keysym_t k, uint state)
-{
-    Key *kp;
-    int i;
-
-    /* Check for mapped keys out of X11 function keys. */
-    for (i = 0; i < mappedkeyslen; i++) {
-        if (mappedkeys[i] == k)
-            break;
-    }
-    if (i == mappedkeyslen) {
-        if ((k & 0xFFFF) < 0xFD00)
-            return NULL;
-    }
-
-    for (kp = key; kp < key + keylen; kp++) {
-        if (kp->k != k)
-            continue;
-
-        if (!match(kp->mask, state))
-            continue;
-
-        if (IS_SET(MODE_APPKEYPAD) ? kp->appkey < 0 : kp->appkey > 0)
-            continue;
-        if (term.numlock && kp->appkey == 2)
-            continue;
-
-        if (IS_SET(MODE_APPCURSOR) ? kp->appcursor < 0 : kp->appcursor > 0)
-            continue;
-
-        if (IS_SET(MODE_CRLF) ? kp->crlf < 0 : kp->crlf > 0)
-            continue;
-
-        return kp->s;
-    }
-
-    return NULL;
 }
 
 void
@@ -380,24 +367,6 @@ kbdrepeatinfo(void *data, struct wl_keyboard *keyboard, int32_t rate,
 
 
 /* Mouse stuff */
-int
-x2col(int x)
-{
-    x -= borderpx;
-    x /= wl.cw;
-
-    return LIMIT(x, 0, term.col-1);
-}
-
-int
-y2row(int y)
-{
-    y -= borderpx;
-    y /= wl.ch;
-
-    return LIMIT(y, 0, term.row-1);
-}
-
 void
 getbuttoninfo(void)
 {
@@ -756,6 +725,82 @@ wldrawcursor(void)
     oldx = curx, oldy = term.c.y;
 }
 
+void
+wlsetsel(char *str, uint32_t serial)
+{
+    free(sel.primary);
+    sel.primary = str;
+
+    if (str) {
+        sel.source = wl_data_device_manager_create_data_source(wl.datadevmanager);
+        wl_data_source_add_listener(sel.source, &datasrclistener, NULL);
+        wl_data_source_offer(sel.source, "text/plain; charset=utf-8");
+    } else {
+        sel.source = NULL;
+    }
+    wl_data_device_set_selection(wl.datadev, sel.source, serial);
+}
+
+static inline void
+selwritebuf(char *buf, int len)
+{
+    char *repl = buf;
+
+    /*
+     * As seen in getsel:
+     * Line endings are inconsistent in the terminal and GUI world
+     * copy and pasting. When receiving some selection data,
+     * replace all '\n' with '\r'.
+     * FIXME: Fix the computer world.
+     */
+    while ((repl = memchr(repl, '\n', len))) {
+        *repl++ = '\r';
+    }
+
+    ttysend(buf, len);
+}
+
+void
+wlselpaste(void)
+{
+    int fds[2], len, left;
+    char buf[BUFSIZ], *str;
+
+    if (wl.seloffer) {
+        if (IS_SET(MODE_BRCKTPASTE))
+            ttywrite("\033[200~", 6);
+        /* check if we are pasting from ourselves */
+        if (sel.source) {
+            str = sel.primary;
+            left = strlen(sel.primary);
+            while (left > 0) {
+                len = MIN(sizeof buf, left);
+                memcpy(buf, str, len);
+                selwritebuf(buf, len);
+                left -= len;
+                str += len;
+            }
+        } else {
+            pipe(fds);
+            wl_data_offer_receive(wl.seloffer, "text/plain", fds[1]);
+            wl_display_flush(wl.dpy);
+            close(fds[1]);
+            while ((len = read(fds[0], buf, sizeof buf)) > 0) {
+                selwritebuf(buf, len);
+            }
+            close(fds[0]);
+        }
+        if (IS_SET(MODE_BRCKTPASTE))
+            ttywrite("\033[201~", 6);
+    }
+}
+
+void
+selcopy(uint32_t serial)
+{
+    wlsetsel(getsel(), serial);
+}
+
 
 
 /* Rendering stuff */
@@ -781,9 +826,78 @@ wlsettitle(char *title)
 }
 
 void
-wlresettitle(void)
+draw(void)
 {
-    wlsettitle(opt_title ? opt_title : "st-wl");
+    int y, y0;
+
+    for (y = 0; y <= term.bot; ++y) {
+        if (!term.dirty[y])
+            continue;
+        for (y0 = y; y <= term.bot && term.dirty[y]; ++y);
+        wl_surface_damage(wl.surface, 0, borderpx + y0 * wl.ch,
+                wl.w, (y - y0) * wl.ch);
+    }
+
+    wld_set_target_buffer(wld.renderer, wld.buffer);
+    drawregion(0, 0, term.col, term.row);
+    wl.framecb = wl_surface_frame(wl.surface);
+    wl_callback_add_listener(wl.framecb, &framelistener, NULL);
+    wld_flush(wld.renderer);
+    wl_surface_attach(wl.surface, wl.buffer, 0, 0);
+    wl_surface_commit(wl.surface);
+    /* need to wait to destroy the old buffer until we commit the new
+     * buffer */
+    if (wld.oldbuffer) {
+        wld_buffer_unreference(wld.oldbuffer);
+        wld.oldbuffer = 0;
+    }
+    needdraw = false;
+}
+
+void
+drawregion(int x1, int y1, int x2, int y2)
+{
+    int ic, ib, x, y, ox;
+    Glyph base, new;
+    char buf[DRAW_BUF_SIZ];
+    int ena_sel = sel.ob.x != -1 && sel.alt == IS_SET(MODE_ALTSCREEN);
+
+    for (y = y1; y < y2; y++) {
+        if (!term.dirty[y])
+            continue;
+
+        term.dirty[y] = 0;
+        base = term.line[y][0];
+        ic = ib = ox = 0;
+        for (x = x1; x < x2; x++) {
+            new = term.line[y][x];
+            if (new.mode == ATTR_WDUMMY)
+                continue;
+            if (ena_sel && selected(x, y))
+                new.mode ^= ATTR_REVERSE;
+            if (ib > 0 && (ATTRCMP(base, new)
+                    || ib >= DRAW_BUF_SIZ-UTF_SIZ)) {
+                wldraws(buf, base, ox, y, ic, ib);
+                ic = ib = 0;
+            }
+            if (ib == 0) {
+                ox = x;
+                base = new;
+            }
+
+            ib += utf8encode(new.u, buf+ib);
+            ic += (new.mode & ATTR_WIDE)? 2 : 1;
+        }
+        if (ib > 0)
+            wldraws(buf, base, ox, y, ic, ib);
+    }
+    wldrawcursor();
+}
+
+void
+wlseturgency(int add)
+{
+    /* XXX: no urgency equivalent yet in wayland */
 }
 
 void
@@ -1367,6 +1481,83 @@ regglobal(void *data, struct wl_registry *registry, uint32_t name,
 void
 regglobalremove(void *data, struct wl_registry *registry, uint32_t name)
 {
+}
+
+void
+datadevoffer(void *data, struct wl_data_device *datadev,
+             struct wl_data_offer *offer)
+{
+    wl_data_offer_add_listener(offer, &dataofferlistener, NULL);
+}
+
+void
+datadeventer(void *data, struct wl_data_device *datadev, uint32_t serial,
+        struct wl_surface *surf, wl_fixed_t x, wl_fixed_t y,
+        struct wl_data_offer *offer)
+{
+}
+
+void
+datadevleave(void *data, struct wl_data_device *datadev)
+{
+}
+
+void
+datadevmotion(void *data, struct wl_data_device *datadev, uint32_t time,
+              wl_fixed_t x, wl_fixed_t y)
+{
+}
+
+void
+datadevdrop(void *data, struct wl_data_device *datadev)
+{
+}
+
+void
+datadevselection(void *data, struct wl_data_device *datadev,
+                 struct wl_data_offer *offer)
+{
+    if (offer && (uintptr_t) wl_data_offer_get_user_data(offer) == 1)
+        wl.seloffer = offer;
+    else
+        wl.seloffer = NULL;
+}
+
+void
+dataofferoffer(void *data, struct wl_data_offer *offer, const char *mimetype)
+{
+    /* mark the offer as usable if it supports plain text */
+    if (strncmp(mimetype, "text/plain", 10) == 0)
+        wl_data_offer_set_user_data(offer, (void *)(uintptr_t) 1);
+}
+
+void
+datasrctarget(void *data, struct wl_data_source *source, const char *mimetype)
+{
+}
+
+void
+datasrcsend(void *data, struct wl_data_source *source, const char *mimetype,
+                    int32_t fd)
+{
+        char *buf = sel.primary;
+            int len = strlen(sel.primary);
+                ssize_t ret;
+                    while ((ret = write(fd, buf, MIN(len, BUFSIZ))) > 0) {
+                                len -= ret;
+                                        buf += ret;
+                                            }
+                        close(fd);
+}
+
+void
+datasrccancelled(void *data, struct wl_data_source *source)
+{
+        if (sel.source == source) {
+                    sel.source = NULL;
+                            selclear();
+                                }
+            wl_data_source_destroy(source);
 }
 
 void

@@ -3,8 +3,6 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
-/* for BTN_* definitions */
-#include <linux/input.h>
 #include <locale.h>
 #include <pwd.h>
 #include <stdarg.h>
@@ -14,7 +12,6 @@
 #include <signal.h>
 #include <stdint.h>
 #include <sys/ioctl.h>
-#include <sys/mman.h>
 #include <sys/select.h>
 #include <sys/stat.h>
 #include <sys/time.h>
@@ -24,16 +21,22 @@
 #include <time.h>
 #include <unistd.h>
 #include <libgen.h>
-#include <wayland-client.h>
-#include <wayland-cursor.h>
-#include <xkbcommon/xkbcommon.h>
-#include <wld/wld.h>
-#include <wld/wayland.h>
 #include <fontconfig/fontconfig.h>
 #include <wchar.h>
+/* for BTN_* definitions */
+#include <linux/input.h>
+#include <sys/mman.h>
+#include <xkbcommon/xkbcommon.h>
+#include <stdbool.h>
 
-#include "arg.h"
-#include "xdg-shell-client-protocol.h"
+/* Wayland */
+#include <wayland-client.h>
+//#include <wayland-cursor.h>
+//#include "xdg-shell-client-protocol.h"
+//#include <wld/wld.h>
+//#include <wld/wayland.h>
+
+//#include "arg.h"
 
 char *argv0;
 
@@ -47,32 +50,20 @@ char *argv0;
  #include <libutil.h>
 #endif
 
-
 /* Arbitrary sizes */
 #define UTF_INVALID   0xFFFD
+#define ESC_BUF_SIZ   (128*UTF_SIZ)
 #define ESC_ARG_SIZ   16
 #define STR_BUF_SIZ   ESC_BUF_SIZ
 #define STR_ARG_SIZ   ESC_ARG_SIZ
-#define DRAW_BUF_SIZ  20*1024
-#define XK_ANY_MOD    UINT_MAX
-#define XK_NO_MOD     0
-#define XK_SWITCH_MOD (1<<13)
-
-#define AXIS_HORIZONTAL	WL_POINTER_AXIS_HORIZONTAL_SCROLL
 
 /* macros */
+#define NUMMAXLEN(x)        ((int)(sizeof(x) * 2.56 + 0.5) + 1)
 #define DEFAULT(a, b)		(a) = (a) ? (a) : (b)
 #define ISCONTROLC0(c)		(BETWEEN(c, 0, 0x1f) || (c) == '\177')
 #define ISCONTROLC1(c)		(BETWEEN(c, 0x80, 0x9f))
 #define ISCONTROL(c)		(ISCONTROLC0(c) || ISCONTROLC1(c))
 #define ISDELIM(u)		(utf8strchr(worddelimiters, u) != NULL)
-#define ATTRCMP(a, b)		((a).mode != (b).mode || (a).fg != (b).fg || \
-				(a).bg != (b).bg)
-
-#define TRUECOLOR(r,g,b)	(1 << 24 | (r) << 16 | (g) << 8 | (b))
-#define TRUERED(x)		(((x) & 0xff0000) >> 8)
-#define TRUEGREEN(x)		(((x) & 0xff00))
-#define TRUEBLUE(x)		(((x) & 0xff) << 8)
 
 /* constants */
 #define ISO14755CMD		"dmenu -p codepoint: </dev/null"
@@ -130,13 +121,33 @@ typedef struct {
 	int narg;              /* nb of args */
 } STREscape;
 
+typedef struct {
+    xkb_keysym_t k;
+    uint mask;
+    char *s;
+    /* three valued logic variables: 0 indifferent, 1 on, -1 off */
+    signed char appkey;    /* application keypad */
+    signed char appcursor; /* application cursor */
+    signed char crlf;      /* crlf mode          */
+} Key;
 
+/* function definitions used in config.h */
+static void clipcopy(const Arg *);
+static void clippaste(const Arg *);
+static void numlock(const Arg *);
+// static void selpaste(const Arg *); // Used in wl.c, defined in st-wl.h
+static void wlzoom(const Arg *);
+static void wlzoomabs(const Arg *);
+static void wlzoomreset(const Arg *);
+static void printsel(const Arg *);
+static void printscreen(const Arg *);
+static void iso14755(const Arg *);
+static void toggleprinter(const Arg *);
+static void sendbreak(const Arg *);
 
-/* Config.h for applying patches and the configuration. */
+/* config.h for applying patches and the configuration. */
 #include "config.h"
 
-static void redraw(void);
-static void drawregion(int, int, int, int);
 static void execsh(void);
 static void stty(void);
 static void sigchld(int);
@@ -164,6 +175,7 @@ static void tinsertblankline(int);
 static int tlinelen(int);
 static void tmoveto(int, int);
 static void tmoveato(int, int);
+static void tnewline(int);
 static void tputtab(int);
 static void tputc(Rune);
 static void treset(void);
@@ -184,10 +196,6 @@ static int32_t tdefcolor(int *, int *, int);
 static void tdeftran(char);
 static void tstrsequence(uchar);
 
-static void wlseturgency(int);
-static void wlsetsel(char*, uint32_t);
-
-static char *getsel(void);
 static void selscroll(int, int);
 static void selsnap(int *, int *, int);
 
@@ -200,14 +208,11 @@ static ssize_t xwrite(int, const char *, size_t);
 static void *xrealloc(void *, size_t);
 
 /* Globals */
-Wayland wl;
-WLD wld;
-static CSIEscape csiescseq;
-static STREscape strescseq;
-pid_t pid;
+Wayland wl; // TermWindow win
+Term term;
 Selection sel;
-bool needdraw = true;
-static int iofd = 1;
+int cmdfd;
+pid_t pid;
 char **opt_cmd  = NULL;
 char *opt_class = NULL;
 char *opt_embed = NULL;
@@ -216,16 +221,15 @@ char *opt_io    = NULL;
 char *opt_line  = NULL;
 char *opt_name  = NULL;
 char *opt_title = NULL;
+int oldbutton   = 3; /* button event on startup: 3 = release */
+
+static CSIEscape csiescseq;
+static STREscape strescseq;
+static int iofd = 1;
 
 char *usedfont = NULL;
 double usedfontsize = 0;
 double defaultfontsize = 0;
-
-static struct wl_callback_listener framelistener = { framedone };
-static struct wl_data_offer_listener dataofferlistener = { dataofferoffer };
-static struct wl_data_source_listener datasrclistener =
-      { datasrctarget, datasrcsend, datasrccancelled };
-
 
 static uchar utfbyte[UTF_SIZ + 1] = {0x80,    0, 0xC0, 0xE0, 0xF0};
 static uchar utfmask[UTF_SIZ + 1] = {0xC0, 0x80, 0xE0, 0xF0, 0xF8};
@@ -234,13 +238,13 @@ static Rune utfmax[UTF_SIZ + 1] = {0x10FFFF, 0x7F, 0x7FF, 0xFFFF, 0x10FFFF};
 
 /* config.h array lengths */
 size_t colornamelen = LEN(colorname);
-size_t maxcolornamelen = MAX(LEN(colorname), 256);
 size_t mshortcutslen = LEN(mshortcuts);
-size_t ashortcutslen = LEN(ashortcuts);
 size_t shortcutslen = LEN(shortcuts);
 size_t selmaskslen = LEN(selmasks);
-size_t mappedkeyslen = LEN(mappedkeys);
-size_t keylen = LEN(key);
+size_t ashortcutslen = LEN(ashortcuts);
+
+/* Wayland stuff */
+bool needdraw = true;
 
 ssize_t
 xwrite(int fd, const char *s, size_t len)
@@ -385,6 +389,24 @@ selinit(void)
 	sel.ob.x = -1;
 	sel.primary = NULL;
 	sel.source = NULL;
+}
+
+int
+x2col(int x)
+{
+    x -= borderpx;
+    x /= wl.cw;
+
+    return LIMIT(x, 0, term.col-1);
+}
+
+int
+y2row(int y)
+{
+    y -= borderpx;
+    y /= wl.ch;
+
+    return LIMIT(y, 0, term.row-1);
 }
 
 int
@@ -572,63 +594,21 @@ getsel(void)
 }
 
 void
-selcopy(uint32_t serial)
+selpaste(const Arg *dummy)
 {
-	wlsetsel(getsel(), serial);
-}
-
-static inline void
-selwritebuf(char *buf, int len)
-{
-	char *repl = buf;
-
-	/*
-	 * As seen in getsel:
-	 * Line endings are inconsistent in the terminal and GUI world
-	 * copy and pasting. When receiving some selection data,
-	 * replace all '\n' with '\r'.
-	 * FIXME: Fix the computer world.
-	 */
-	while ((repl = memchr(repl, '\n', len))) {
-		*repl++ = '\r';
-	}
-
-	ttysend(buf, len);
+    wlselpaste();
 }
 
 void
-selpaste(const Arg *dummy)
+clipcopy(const Arg *dummy)
 {
-	int fds[2], len, left;
-	char buf[BUFSIZ], *str;
+    // TODO: Check what xclipcopy() does
+}
 
-	if (wl.seloffer) {
-		if (IS_SET(MODE_BRCKTPASTE))
-			ttywrite("\033[200~", 6);
-		/* check if we are pasting from ourselves */
-		if (sel.source) {
-			str = sel.primary;
-			left = strlen(sel.primary);
-			while (left > 0) {
-				len = MIN(sizeof buf, left);
-				memcpy(buf, str, len);
-				selwritebuf(buf, len);
-				left -= len;
-				str += len;
-			}
-		} else {
-			pipe(fds);
-			wl_data_offer_receive(wl.seloffer, "text/plain", fds[1]);
-			wl_display_flush(wl.dpy);
-			close(fds[1]);
-			while ((len = read(fds[0], buf, sizeof buf)) > 0) {
-				selwritebuf(buf, len);
-			}
-			close(fds[0]);
-		}
-		if (IS_SET(MODE_BRCKTPASTE))
-			ttywrite("\033[201~", 6);
-	}
+void
+clippaste(const Arg *dummy)
+{
+    // TODO: Check what xclippaste() does
 }
 
 void
@@ -639,22 +619,6 @@ selclear(void)
 	sel.mode = SEL_IDLE;
 	sel.ob.x = -1;
 	tsetdirt(sel.nb.y, sel.ne.y);
-}
-
-void
-wlsetsel(char *str, uint32_t serial)
-{
-	free(sel.primary);
-	sel.primary = str;
-
-	if (str) {
-		sel.source = wl_data_device_manager_create_data_source(wl.datadevmanager);
-		wl_data_source_add_listener(sel.source, &datasrclistener, NULL);
-		wl_data_source_offer(sel.source, "text/plain; charset=utf-8");
-	} else {
-		sel.source = NULL;
-	}
-	wl_data_device_set_selection(wl.datadev, sel.source, serial);
 }
 
 void
@@ -701,6 +665,7 @@ execsh(void)
 	setenv("SHELL", sh, 1);
 	setenv("HOME", pw->pw_dir, 1);
 	setenv("TERM", termname, 1);
+    // xsetenv();
 
 	signal(SIGCHLD, SIG_DFL);
 	signal(SIGHUP, SIG_DFL);
@@ -726,7 +691,7 @@ sigchld(int a)
 		return;
 
 	if (!WIFEXITED(stat) || WEXITSTATUS(stat))
-		die("child finished with error '%d'\n", WEXITSTATUS(stat));
+		die("child finished with error '%d'\n", stat);
 	exit(0);
 }
 
@@ -1515,18 +1480,22 @@ tsetmode(int priv, int set, int *args, int narg)
 				MODBIT(term.mode, !set, MODE_HIDE);
 				break;
 			case 9:    /* X10 mouse compatibility mode */
+                // xsetpointermotion(0);
 				MODBIT(term.mode, 0, MODE_MOUSE);
 				MODBIT(term.mode, set, MODE_MOUSEX10);
 				break;
 			case 1000: /* 1000: report button press */
+                // xsetpointermotion(0);
 				MODBIT(term.mode, 0, MODE_MOUSE);
 				MODBIT(term.mode, set, MODE_MOUSEBTN);
 				break;
 			case 1002: /* 1002: report motion on button press */
+                // xsetpointermotion(0);
 				MODBIT(term.mode, 0, MODE_MOUSE);
 				MODBIT(term.mode, set, MODE_MOUSEMOTION);
 				break;
 			case 1003: /* 1003: enable all mouse motions */
+                // xsetpointermotion(0);
 				MODBIT(term.mode, 0, MODE_MOUSE);
 				MODBIT(term.mode, set, MODE_MOUSEMANY);
 				break;
@@ -2165,10 +2134,8 @@ tcontrolcode(uchar ascii)
 		} else {
 			if (!(wl.state & WIN_FOCUSED))
 				wlseturgency(1);
-			/* XXX: No bell on wayland
-			 * if (bellvolume)
-			 *     XkbBell(xw.dpy, xw.win, bellvolume, (Atom)NULL);
-			 */
+			// if (bellvolume) // XXX: No bell on wayland
+            //     XkbBell(xw.dpy, xw.win, bellvolume, (Atom)NULL);
 		}
 		break;
 	case '\033': /* ESC */
@@ -2358,7 +2325,7 @@ tputc(Rune u)
 	 */
 	if (term.esc & ESC_STR) {
 		if (u == '\a' || u == 030 || u == 032 || u == 033 ||
-		    ISCONTROLC1(u)) {
+		   ISCONTROLC1(u)) {
 			term.esc &= ~(ESC_START|ESC_STR|ESC_DCS);
 			if (IS_SET(MODE_SIXEL)) {
 				/* TODO: render sixel */;
@@ -2508,6 +2475,9 @@ tresize(int col, int row)
 		free(term.alt[i]);
 	}
 
+    /* resize to new width */
+    // term.specbuf = xrealloc(term.specbuf, col * sizeof(GlyphFontSpec));
+
 	/* resize to new height */
 	term.line = xrealloc(term.line, row * sizeof(Line));
 	term.alt  = xrealloc(term.alt,  row * sizeof(Line));
@@ -2575,8 +2545,7 @@ wlzoomabs(const Arg *arg)
 	redraw();
 	/* XXX: Should the window size be updated here because wayland doesn't
 	 * have a notion of hints?
-	 * xhints();
-	 */
+	 * xhints(); */
 }
 
 void
@@ -2591,90 +2560,68 @@ wlzoomreset(const Arg *arg)
 }
 
 void
+wlresettitle(void)
+{
+    wlsettitle(opt_title ? opt_title : "st-wl");
+}
+
+void
 redraw(void)
 {
 	tfulldirt();
+    // draw(); // Removed in wayland branch
 }
 
-void
-draw(void)
+int
+match(uint mask, uint state)
 {
-	int y, y0;
-
-	for (y = 0; y <= term.bot; ++y) {
-		if (!term.dirty[y])
-			continue;
-		for (y0 = y; y <= term.bot && term.dirty[y]; ++y);
-		wl_surface_damage(wl.surface, 0, borderpx + y0 * wl.ch,
-				wl.w, (y - y0) * wl.ch);
-	}
-
-	wld_set_target_buffer(wld.renderer, wld.buffer);
-	drawregion(0, 0, term.col, term.row);
-	wl.framecb = wl_surface_frame(wl.surface);
-	wl_callback_add_listener(wl.framecb, &framelistener, NULL);
-	wld_flush(wld.renderer);
-	wl_surface_attach(wl.surface, wl.buffer, 0, 0);
-	wl_surface_commit(wl.surface);
-	/* need to wait to destroy the old buffer until we commit the new
-	 * buffer */
-	if (wld.oldbuffer) {
-		wld_buffer_unreference(wld.oldbuffer);
-		wld.oldbuffer = 0;
-	}
-	needdraw = false;
-}
-
-void
-drawregion(int x1, int y1, int x2, int y2)
-{
-	int ic, ib, x, y, ox;
-	Glyph base, new;
-	char buf[DRAW_BUF_SIZ];
-	int ena_sel = sel.ob.x != -1 && sel.alt == IS_SET(MODE_ALTSCREEN);
-
-	for (y = y1; y < y2; y++) {
-		if (!term.dirty[y])
-			continue;
-
-		term.dirty[y] = 0;
-		base = term.line[y][0];
-		ic = ib = ox = 0;
-		for (x = x1; x < x2; x++) {
-			new = term.line[y][x];
-			if (new.mode == ATTR_WDUMMY)
-				continue;
-			if (ena_sel && selected(x, y))
-				new.mode ^= ATTR_REVERSE;
-			if (ib > 0 && (ATTRCMP(base, new)
-					|| ib >= DRAW_BUF_SIZ-UTF_SIZ)) {
-				wldraws(buf, base, ox, y, ic, ib);
-				ic = ib = 0;
-			}
-			if (ib == 0) {
-				ox = x;
-				base = new;
-			}
-
-			ib += utf8encode(new.u, buf+ib);
-			ic += (new.mode & ATTR_WIDE)? 2 : 1;
-		}
-		if (ib > 0)
-			wldraws(buf, base, ox, y, ic, ib);
-	}
-	wldrawcursor();
-}
-
-void
-wlseturgency(int add)
-{
-	/* XXX: no urgency equivalent yet in wayland */
+    return mask == MOD_MASK_ANY || mask == (state & ~(ignoremod));
 }
 
 void
 numlock(const Arg *dummy)
 {
 	term.numlock ^= 1;
+}
+
+char*
+kmap(xkb_keysym_t k, uint state)
+{
+    Key *kp;
+    int i;
+
+    /* Check for mapped keys out of X11 function keys. */
+    for (i = 0; i < LEN(mappedkeys); i++) {
+        if (mappedkeys[i] == k)
+            break;
+    }
+    if (i == LEN(mappedkeys)) {
+        if ((k & 0xFFFF) < 0xFD00)
+            return NULL;
+    }
+
+    for (kp = key; kp < key + LEN(key); kp++) {
+        if (kp->k != k)
+            continue;
+
+        if (!match(kp->mask, state))
+            continue;
+
+        if (IS_SET(MODE_APPKEYPAD) ? kp->appkey < 0 : kp->appkey > 0)
+            continue;
+        if (term.numlock && kp->appkey == 2)
+            continue;
+
+        if (IS_SET(MODE_APPCURSOR) ? kp->appcursor < 0 : kp->appcursor > 0)
+            continue;
+
+        if (IS_SET(MODE_CRLF) ? kp->crlf < 0 : kp->crlf > 0)
+            continue;
+
+        return kp->s;
+    }
+
+    return NULL;
 }
 
 void
@@ -2692,83 +2639,6 @@ cresize(int width, int height)
 
 	tresize(col, row);
 	wlresize(col, row);
-}
-
-void
-datadevoffer(void *data, struct wl_data_device *datadev,
-             struct wl_data_offer *offer)
-{
-	wl_data_offer_add_listener(offer, &dataofferlistener, NULL);
-}
-
-void
-datadeventer(void *data, struct wl_data_device *datadev, uint32_t serial,
-		struct wl_surface *surf, wl_fixed_t x, wl_fixed_t y,
-		struct wl_data_offer *offer)
-{
-}
-
-void
-datadevleave(void *data, struct wl_data_device *datadev)
-{
-}
-
-void
-datadevmotion(void *data, struct wl_data_device *datadev, uint32_t time,
-              wl_fixed_t x, wl_fixed_t y)
-{
-}
-
-void
-datadevdrop(void *data, struct wl_data_device *datadev)
-{
-}
-
-void
-datadevselection(void *data, struct wl_data_device *datadev,
-                 struct wl_data_offer *offer)
-{
-	if (offer && (uintptr_t) wl_data_offer_get_user_data(offer) == 1)
-		wl.seloffer = offer;
-	else
-		wl.seloffer = NULL;
-}
-
-void
-dataofferoffer(void *data, struct wl_data_offer *offer, const char *mimetype)
-{
-	/* mark the offer as usable if it supports plain text */
-	if (strncmp(mimetype, "text/plain", 10) == 0)
-		wl_data_offer_set_user_data(offer, (void *)(uintptr_t) 1);
-}
-
-void
-datasrctarget(void *data, struct wl_data_source *source, const char *mimetype)
-{
-}
-
-void
-datasrcsend(void *data, struct wl_data_source *source, const char *mimetype,
-            int32_t fd)
-{
-	char *buf = sel.primary;
-	int len = strlen(sel.primary);
-	ssize_t ret;
-	while ((ret = write(fd, buf, MIN(len, BUFSIZ))) > 0) {
-		len -= ret;
-		buf += ret;
-	}
-	close(fd);
-}
-
-void
-datasrccancelled(void *data, struct wl_data_source *source)
-{
-	if (sel.source == source) {
-		sel.source = NULL;
-		selclear();
-	}
-	wl_data_source_destroy(source);
 }
 
 void

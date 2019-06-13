@@ -23,6 +23,7 @@
 #define LIMIT(x, a, b)      (x) = (x) < (a) ? (a) : (x) > (b) ? (b) : (x)
 #define IS_SET(flag)        ((term.mode & (flag)) != 0)
 
+#define TRUECOLOR(r,g,b)    (1 << 24 | (r) << 16 | (g) << 8 | (b))
 
 
 /* type declarations */
@@ -32,16 +33,6 @@ typedef unsigned long ulong;
 typedef unsigned short ushort;
 
 typedef uint_least32_t Rune;
-
-typedef struct {
-    xkb_keysym_t k;
-    uint mask;
-    char *s;
-    /* three valued logic variables: 0 indifferent, 1 on, -1 off */
-    signed char appkey;    /* application keypad */
-    signed char appcursor; /* application cursor */
-    signed char crlf;      /* crlf mode          */
-} Key;
 
 typedef struct {
     Rune u;           /* character code */
@@ -150,13 +141,6 @@ typedef struct {
 } Repeat;
 
 typedef struct {
-    struct wld_context *ctx;
-    struct wld_font_context *fontctx;
-    struct wld_renderer *renderer;
-    struct wld_buffer *buffer, *oldbuffer;
-} WLD;
-
-typedef struct {
     int mode;
     int type;
     int snap;
@@ -186,7 +170,9 @@ void *xmalloc(size_t);
 size_t utf8decode(char *, Rune *, size_t);
 size_t utf8encode(Rune, char *);
 void usage(void);
+char *kmap(xkb_keysym_t, uint);
 void cresize(int, int);
+int match(uint, uint);
 void ttynew(void);
 void ttysend(char *, size_t);
 size_t ttyread(void);
@@ -195,6 +181,7 @@ void ttyresize(void);
 void draw(void);
 int cmdfd;
 void die(const char *, ...);
+void redraw(void);
 
 int tattrset(int);
 void tsetdirtattr(int);
@@ -208,6 +195,10 @@ void selnormalize(void);
 void selclear(void);
 void selcopy(uint32_t);
 int selected(int, int);
+char *getsel(void);
+int x2col(int);
+int y2row(int);
+
 
 void wlsettitle(char *);
 void wlresettitle(void);
@@ -219,22 +210,9 @@ void wlloadfonts(char *, double);
 void wlunloadfonts(void);
 void wldrawcursor(void);
 void wldraws(char *, Glyph, int, int, int, int);
+void wlseturgency(int);
 void framedone(void *, struct wl_callback *, uint32_t);
-
-void datadevoffer(void *, struct wl_data_device *,
-        struct wl_data_offer *);
-void datadeventer(void *, struct wl_data_device *, uint32_t,
-        struct wl_surface *, wl_fixed_t, wl_fixed_t, struct wl_data_offer *);
-void datadevleave(void *, struct wl_data_device *);
-void datadevmotion(void *, struct wl_data_device *, uint32_t,
-        wl_fixed_t x, wl_fixed_t y);
-void datadevdrop(void *, struct wl_data_device *);
-void datadevselection(void *, struct wl_data_device *,
-        struct wl_data_offer *);
-void dataofferoffer(void *, struct wl_data_offer *, const char *);
-void datasrctarget(void *, struct wl_data_source *, const char *);
-void datasrcsend(void *, struct wl_data_source *, const char *, int32_t);
-void datasrccancelled(void *, struct wl_data_source *);
+void wlselpaste(void);
 
 
 
@@ -305,7 +283,6 @@ enum window_state {
 };
 
 pid_t pid;
-WLD wld;
 Wayland wl;
 Term term;
 Repeat repeat;
@@ -371,17 +348,7 @@ extern uint selmasks[];
 extern size_t selmaskslen;
 extern char ascii_printable[];
 extern uint ignoremod;
-extern Key key[];
 extern size_t keylen;
 
 /* function definitions used in config.h */
-void numlock(const Arg *);
 void selpaste(const Arg *);
-void wlzoom(const Arg *);
-void wlzoomabs(const Arg *);
-void wlzoomreset(const Arg *);
-void printsel(const Arg *);
-void printscreen(const Arg *);
-void iso14755(const Arg *);
-void toggleprinter(const Arg *);
-void sendbreak(const Arg *);
