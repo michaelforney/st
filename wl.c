@@ -19,7 +19,6 @@
 #include <wld/wld.h>
 #include <wld/wayland.h>
 #include <xkbcommon/xkbcommon.h>
-//#include <fontconfig/fontconfig.h>
 #include <wchar.h>
 
 #include "arg.h"
@@ -27,25 +26,8 @@
 #include "st-wl.h"
 #include "xdg-shell-client-protocol.h"
 
-//#include <ctype.h>
-//#include <limits.h>
-//#include <pwd.h>
-//#include <stdarg.h>
-//#include <stdio.h>
-//#include <sys/ioctl.h>
-//#include <sys/stat.h>
-//#include <sys/time.h>
-//#include <sys/types.h>
-//#include <sys/wait.h>
-//#include <termios.h>
-
 #define DRAW_BUF_SIZ  20*1024
 
-/* Macros */
-
-
-
-/* Type declarations */
 typedef struct {
     struct xkb_context *ctx;
     struct xkb_keymap *keymap;
@@ -72,17 +54,10 @@ typedef struct {
     XKB xkb;
     bool configured;
     int px, py; /* pointer x and y */
-    //int tw, th; /* tty width and height */
-    //int w, h; /* window width and height */
-    //int ch; /* char height */
-    //int cw; /* char width  */
     int vis;
-    //char state; /* focus, redraw, visible */
-    //int cursor; /* cursor style */
     struct wl_callback * framecb;
 } Wayland;
 
-/* Font structure */
 typedef struct {
     int height;
     int width;
@@ -125,59 +100,60 @@ typedef struct {
     struct timespec last;
 } Repeat;
 
-
-
-/* Function declarations */
-static void kbdkeymap(void *, struct wl_keyboard *, uint32_t, int32_t, uint32_t);
-static void kbdenter(void *, struct wl_keyboard *, uint32_t,
-                struct wl_surface *, struct wl_array *);
-static void kbdleave(void *, struct wl_keyboard *, uint32_t,
-                struct wl_surface *);
-static void kbdkey(void *, struct wl_keyboard *, uint32_t, uint32_t, uint32_t,
-                uint32_t);
-static void kbdmodifiers(void *, struct wl_keyboard *, uint32_t, uint32_t,
-                uint32_t, uint32_t, uint32_t);
-static void kbdrepeatinfo(void *, struct wl_keyboard *, int32_t, int32_t);
-
-static void ptrenter(void *, struct wl_pointer *, uint32_t, struct wl_surface *,
-                wl_fixed_t, wl_fixed_t);
+static void getbuttoninfo(void);
+static void wlmousereport(int, bool, int, int);
+static void wlmousereportbutton(uint32_t, uint32_t);
+static void wlmousereportmotion(wl_fixed_t, wl_fixed_t);
+static void wlmousereportaxis(uint32_t, wl_fixed_t);
+static void ptrenter(void *, struct wl_pointer *, uint32_t,
+        struct wl_surface *, wl_fixed_t, wl_fixed_t);
 static void ptrleave(void *, struct wl_pointer *, uint32_t,
-                struct wl_surface *);
+        struct wl_surface *);
 static void ptrmotion(void *, struct wl_pointer *, uint32_t,
-                wl_fixed_t, wl_fixed_t);
+        wl_fixed_t, wl_fixed_t);
 static void ptrbutton(void *, struct wl_pointer *, uint32_t, uint32_t,
-                uint32_t, uint32_t);
+        uint32_t, uint32_t);
 static void ptraxis(void *, struct wl_pointer *, uint32_t, uint32_t,
-                wl_fixed_t);
-static void wlloadcursor(void);
-static void wldrawcursor(void);
-
+        wl_fixed_t);
 static void wlsetsel(char*, uint32_t);
+static inline void selwritebuf(char *, int);
 static void selcopy(uint32_t);
 
+/* Keyboard stuff */
+static void kbdkeymap(void *, struct wl_keyboard *, uint32_t, int32_t,
+        uint32_t);
+static void kbdenter(void *, struct wl_keyboard *, uint32_t,
+        struct wl_surface *, struct wl_array *);
+static void kbdleave(void *, struct wl_keyboard *, uint32_t,
+        struct wl_surface *);
+static void kbdkey(void *, struct wl_keyboard *, uint32_t, uint32_t, uint32_t,
+        uint32_t);
+static void kbdmodifiers(void *, struct wl_keyboard *, uint32_t, uint32_t,
+        uint32_t, uint32_t, uint32_t);
+static void kbdrepeatinfo(void *, struct wl_keyboard *, int32_t, int32_t);
 
+static void surfenter(void *, struct wl_surface *, struct wl_output *);
+static void surfleave(void *, struct wl_surface *, struct wl_output *);
+static void framedone(void *, struct wl_callback *, uint32_t);
+static void xdgsurfconfigure(void *, struct xdg_surface *, uint32_t);
+static void xdgtoplevelconfigure(void *, struct xdg_toplevel *,
+        int32_t, int32_t, struct wl_array *);
+static void xdgtoplevelclose(void *, struct xdg_toplevel *);
+static void wmping(void *, struct xdg_wm_base *, uint32_t);
 
 static inline uchar sixd_to_8bit(int);
 static int wlloadfont(Font *, FcPattern *);
 static void wlunloadfont(Font *f);
-static void wldrawglyph(Glyph, int, int);
+
 static void wlclear(int, int, int, int);
 static void wldraws(char *, Glyph, int, int, int, int);
-static void framedone(void *, struct wl_callback *, uint32_t);
-
-
+static void wldrawglyph(Glyph, int, int);
+static void wlloadcursor(void);
+static void wldrawcursor(void);
 
 static void regglobal(void *, struct wl_registry *, uint32_t, const char *,
                 uint32_t);
 static void regglobalremove(void *, struct wl_registry *, uint32_t);
-static void surfenter(void *, struct wl_surface *, struct wl_output *);
-static void surfleave(void *, struct wl_surface *, struct wl_output *);
-static void wmping(void *, struct xdg_wm_base *, uint32_t);
-static void xdgsurfconfigure(void *, struct xdg_surface *, uint32_t);
-static void xdgtoplevelconfigure(void *, struct xdg_toplevel *,
-                int32_t, int32_t, struct wl_array *);
-static void xdgtoplevelclose(void *, struct xdg_toplevel *);
-
 static void datadevoffer(void *, struct wl_data_device *,
         struct wl_data_offer *);
 static void datadeventer(void *, struct wl_data_device *, uint32_t,
@@ -190,29 +166,11 @@ static void datadevselection(void *, struct wl_data_device *,
         struct wl_data_offer *);
 static void dataofferoffer(void *, struct wl_data_offer *, const char *);
 static void datasrctarget(void *, struct wl_data_source *, const char *);
-static void datasrcsend(void *, struct wl_data_source *, const char *, int32_t);
+static void datasrcsend(void *, struct wl_data_source *, const char *,
+        int32_t);
 static void datasrccancelled(void *, struct wl_data_source *);
 
-
 /* Globals */
-static struct wl_callback_listener framelistener = { framedone };
-static struct wl_registry_listener reglistener = { regglobal, regglobalremove };
-static struct wl_surface_listener surflistener = { surfenter, surfleave };
-static struct wl_keyboard_listener kbdlistener =
-    { kbdkeymap, kbdenter, kbdleave, kbdkey, kbdmodifiers, kbdrepeatinfo };
-static struct wl_pointer_listener ptrlistener =
-    { ptrenter, ptrleave, ptrmotion, ptrbutton, ptraxis };
-static struct xdg_wm_base_listener wmlistener = { wmping };
-static struct xdg_surface_listener xdgsurflistener = { xdgsurfconfigure };
-static struct xdg_toplevel_listener xdgtoplevellistener =
-    { xdgtoplevelconfigure, xdgtoplevelclose };
-static struct wl_data_device_listener datadevlistener =
-    { datadevoffer, datadeventer, datadevleave, datadevmotion, datadevdrop,
-      datadevselection };
-static struct wl_data_source_listener datasrclistener =
-      { datasrctarget, datasrcsend, datasrccancelled };
-static struct wl_data_offer_listener dataofferlistener = { dataofferoffer };
-
 static DC dc;
 static Wayland wl;
 static WLD wld;
@@ -220,6 +178,23 @@ static Cursor cursor;
 static Repeat repeat;
 static int oldx, oldy;
 
+static struct wl_callback_listener framelistener = { framedone };
+static struct wl_registry_listener reglistener = { regglobal,
+    regglobalremove };
+static struct wl_surface_listener surflistener = { surfenter, surfleave };
+static struct wl_keyboard_listener kbdlistener = { kbdkeymap, kbdenter,
+    kbdleave, kbdkey, kbdmodifiers, kbdrepeatinfo };
+static struct wl_pointer_listener ptrlistener = { ptrenter, ptrleave,
+    ptrmotion, ptrbutton, ptraxis };
+static struct xdg_wm_base_listener wmlistener = { wmping };
+static struct xdg_surface_listener xdgsurflistener = { xdgsurfconfigure };
+static struct xdg_toplevel_listener xdgtoplevellistener = {
+    xdgtoplevelconfigure, xdgtoplevelclose };
+static struct wl_data_device_listener datadevlistener = { datadevoffer,
+    datadeventer, datadevleave, datadevmotion, datadevdrop, datadevselection };
+static struct wl_data_source_listener datasrclistener = { datasrctarget,
+    datasrcsend, datasrccancelled };
+static struct wl_data_offer_listener dataofferlistener = { dataofferoffer };
 
 /* Font Ring Cache */
 enum {
@@ -239,174 +214,6 @@ typedef struct {
 static Fontcache frc[16];
 static int frclen = 0;
 
-
-
-/* Keyboard stuff */
-void
-kbdkeymap(void *data, struct wl_keyboard *keyboard, uint32_t format, int32_t fd,
-          uint32_t size)
-{
-    char *string;
-
-    if (format != WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1) {
-        close(fd);
-        return;
-    }
-
-    string = mmap(NULL, size, PROT_READ, MAP_SHARED, fd, 0);
-
-    if (string == MAP_FAILED) {
-        close(fd);
-        return;
-    }
-
-    wl.xkb.keymap = xkb_keymap_new_from_string(wl.xkb.ctx, string,
-            XKB_KEYMAP_FORMAT_TEXT_V1, 0);
-    munmap(string, size);
-    close(fd);
-    wl.xkb.state = xkb_state_new(wl.xkb.keymap);
-
-    wl.xkb.ctrl = xkb_keymap_mod_get_index(wl.xkb.keymap, XKB_MOD_NAME_CTRL);
-    wl.xkb.alt = xkb_keymap_mod_get_index(wl.xkb.keymap, XKB_MOD_NAME_ALT);
-    wl.xkb.shift = xkb_keymap_mod_get_index(wl.xkb.keymap, XKB_MOD_NAME_SHIFT);
-    wl.xkb.logo = xkb_keymap_mod_get_index(wl.xkb.keymap, XKB_MOD_NAME_LOGO);
-
-    wl.xkb.mods = 0;
-}
-
-void
-kbdenter(void *data, struct wl_keyboard *keyboard, uint32_t serial,
-         struct wl_surface *surface, struct wl_array *keys)
-{
-    win.state |= WIN_FOCUSED;
-    if (IS_SET(MODE_FOCUS))
-        ttywrite("\033[I", 3);
-    /* need to redraw the cursor */
-    needdraw = true;
-}
-
-void
-kbdleave(void *data, struct wl_keyboard *keyboard, uint32_t serial,
-     struct wl_surface *surface)
-{
-    /* selection offers are invalidated when we lose keyboard focus */
-    wl.seloffer = NULL;
-    win.state &= ~WIN_FOCUSED;
-    if (IS_SET(MODE_FOCUS))
-        ttywrite("\033[O", 3);
-    /* need to redraw the cursor */
-    needdraw = true;
-    /* disable key repeat */
-    repeat.len = 0;
-}
-
-void
-kbdkey(void *data, struct wl_keyboard *keyboard, uint32_t serial, uint32_t time,
-       uint32_t key, uint32_t state)
-{
-    xkb_keysym_t ksym;
-    char buf[32], *str;
-    int len;
-    Rune c;
-    Shortcut *bp;
-
-    if (IS_SET(MODE_KBDLOCK))
-        return;
-
-    if (state == WL_KEYBOARD_KEY_STATE_RELEASED) {
-        if (repeat.key == key)
-            repeat.len = 0;
-        return;
-    }
-
-    ksym = xkb_state_key_get_one_sym(wl.xkb.state, key + 8);
-    len = xkb_keysym_to_utf8(ksym, buf, sizeof buf);
-    if (len > 0)
-        --len;
-
-    /* 1. shortcuts */
-    for (bp = shortcuts; bp < shortcuts + shortcutslen; bp++) {
-        if (ksym == bp->keysym && match(bp->mod, wl.xkb.mods)) {
-            bp->func(&(bp->arg));
-            return;
-        }
-    }
-
-    /* 2. custom keys from config.h */
-    if ((str = kmap(ksym, wl.xkb.mods))) {
-        len = strlen(str);
-        goto send;
-    }
-
-    /* 3. composed string from input method */
-    if (len == 0)
-        return;
-    if (len == 1 && wl.xkb.mods & MOD_MASK_ALT) {
-        if (IS_SET(MODE_8BIT)) {
-            if (*buf < 0177) {
-                c = *buf | 0x80;
-                len = utf8encode(c, buf);
-            }
-        } else {
-            buf[1] = buf[0];
-            buf[0] = '\033';
-            len = 2;
-        }
-    }
-    /* convert character to control character */
-    else if (len == 1 && wl.xkb.mods & MOD_MASK_CTRL) {
-        if ((*buf >= '@' && *buf < '\177') || *buf == ' ')
-            *buf &= 0x1F;
-        else if (*buf == '2') *buf = '\000';
-        else if (*buf >= '3' && *buf <= '7')
-            *buf -= ('3' - '\033');
-        else if (*buf == '8') *buf = '\177';
-        else if (*buf == '/') *buf = '_' & 0x1F;
-    }
-
-    str = buf;
-
-send:
-    memcpy(repeat.str, str, len);
-    repeat.key = key;
-    repeat.len = len;
-    repeat.started = false;
-    clock_gettime(CLOCK_MONOTONIC, &repeat.last);
-    ttysend(str, len);
-}
-
-void
-kbdmodifiers(void *data, struct wl_keyboard *keyboard, uint32_t serial,
-             uint32_t dep, uint32_t lat, uint32_t lck, uint32_t group)
-{
-    xkb_mod_mask_t mod_mask;
-
-    xkb_state_update_mask(wl.xkb.state, dep, lat, lck, group, 0, 0);
-
-    mod_mask = xkb_state_serialize_mods(wl.xkb.state, XKB_STATE_MODS_EFFECTIVE);
-    wl.xkb.mods = 0;
-
-    if (mod_mask & (1 << wl.xkb.ctrl))
-        wl.xkb.mods |= MOD_MASK_CTRL;
-    if (mod_mask & (1 << wl.xkb.alt))
-        wl.xkb.mods |= MOD_MASK_ALT;
-    if (mod_mask & (1 << wl.xkb.shift))
-        wl.xkb.mods |= MOD_MASK_SHIFT;
-    if (mod_mask & (1 << wl.xkb.logo))
-        wl.xkb.mods |= MOD_MASK_LOGO;
-}
-
-void
-kbdrepeatinfo(void *data, struct wl_keyboard *keyboard, int32_t rate,
-              int32_t delay)
-{
-    keyrepeatdelay = delay;
-    keyrepeatinterval = 1000 / rate;
-}
-
-
-
-/* Mouse stuff */
 void
 getbuttoninfo(void)
 {
@@ -644,127 +451,6 @@ ptraxis(void * data, struct wl_pointer * pointer, uint32_t time, uint32_t axis,
     }
 }
 
-static void wlloadcursor(void)
-{
-    char *names[] = { mouseshape, "xterm", "ibeam", "text" };
-    int i;
-
-    cursor.theme = wl_cursor_theme_load(NULL, 32, wl.shm);
-
-    for (i = 0; !cursor.cursor && i < LEN(names); i++)
-        cursor.cursor = wl_cursor_theme_get_cursor(cursor.theme, names[i]);
-
-    cursor.surface = wl_compositor_create_surface(wl.cmp);
-}
-
-void
-wldrawcursor(void)
-{
-    static int oldx = 0, oldy = 0;
-    int curx;
-    Glyph g = {' ', ATTR_NULL, defaultbg, defaultcs}, og;
-    int ena_sel = sel.ob.x != -1 && sel.alt == IS_SET(MODE_ALTSCREEN);
-    uint32_t drawcol;
-
-    LIMIT(oldx, 0, term.col-1);
-    LIMIT(oldy, 0, term.row-1);
-
-    curx = term.c.x;
-
-    /* adjust position if in dummy */
-    if (term.line[oldy][oldx].mode & ATTR_WDUMMY)
-        oldx--;
-    if (term.line[term.c.y][curx].mode & ATTR_WDUMMY)
-        curx--;
-
-    /* remove the old cursor */
-    og = term.line[oldy][oldx];
-    if (ena_sel && selected(oldx, oldy))
-        og.mode ^= ATTR_REVERSE;
-    wldrawglyph(og, oldx, oldy);
-    if (oldx != curx || oldy != term.c.y) {
-        wl_surface_damage(wl.surface, borderpx + oldx * win.cw,
-                borderpx + oldy * win.ch, win.cw, win.ch);
-    }
-
-    g.u = term.line[term.c.y][term.c.x].u;
-
-    /*
-     * Select the right color for the right mode.
-     */
-    if (IS_SET(MODE_REVERSE)) {
-        g.mode |= ATTR_REVERSE;
-        g.bg = defaultfg;
-        if (ena_sel && selected(term.c.x, term.c.y)) {
-            drawcol = dc.col[defaultcs];
-            g.fg = defaultrcs;
-        } else {
-            drawcol = dc.col[defaultrcs];
-            g.fg = defaultcs;
-        }
-    } else {
-        if (ena_sel && selected(term.c.x, term.c.y)) {
-            drawcol = dc.col[defaultrcs];
-            g.fg = defaultfg;
-            g.bg = defaultrcs;
-        } else {
-            drawcol = dc.col[defaultcs];
-        }
-    }
-
-    if (IS_SET(MODE_HIDE))
-        return;
-
-    /* draw the new one */
-    if (win.state & WIN_FOCUSED) {
-        switch (win.cursor) {
-        case 7: /* st-wl extension: snowman */
-            utf8decode("☃", &g.u, UTF_SIZ);
-        case 0: /* Blinking Block */
-        case 1: /* Blinking Block (Default) */
-        case 2: /* Steady Block */
-            g.mode |= term.line[term.c.y][curx].mode & ATTR_WIDE;
-            wldrawglyph(g, term.c.x, term.c.y);
-            break;
-        case 3: /* Blinking Underline */
-        case 4: /* Steady Underline */
-            wld_fill_rectangle(wld.renderer, drawcol,
-                    borderpx + curx * win.cw,
-                    borderpx + (term.c.y + 1) * win.ch - \
-                        cursorthickness,
-                    win.cw, cursorthickness);
-            break;
-        case 5: /* Blinking bar */
-        case 6: /* Steady bar */
-            wld_fill_rectangle(wld.renderer, drawcol,
-                    borderpx + curx * win.cw,
-                    borderpx + term.c.y * win.ch,
-                    cursorthickness, win.ch);
-            break;
-        }
-    } else {
-        wld_fill_rectangle(wld.renderer, drawcol,
-                borderpx + curx * win.cw,
-                borderpx + term.c.y * win.ch,
-                win.cw - 1, 1);
-        wld_fill_rectangle(wld.renderer, drawcol,
-                borderpx + curx * win.cw,
-                borderpx + term.c.y * win.ch,
-                1, win.ch - 1);
-        wld_fill_rectangle(wld.renderer, drawcol,
-                borderpx + (curx + 1) * win.cw - 1,
-                borderpx + term.c.y * win.ch,
-                1, win.ch - 1);
-        wld_fill_rectangle(wld.renderer, drawcol,
-                borderpx + curx * win.cw,
-                borderpx + (term.c.y + 1) * win.ch - 1,
-                win.cw, 1);
-    }
-    wl_surface_damage(wl.surface, borderpx + curx * win.cw,
-            borderpx + term.c.y * win.ch, win.cw, win.ch);
-    oldx = curx, oldy = term.c.y;
-}
-
 void
 wlsetsel(char *str, uint32_t serial)
 {
@@ -781,7 +467,7 @@ wlsetsel(char *str, uint32_t serial)
     wl_data_device_set_selection(wl.datadev, sel.source, serial);
 }
 
-static inline void
+void
 selwritebuf(char *buf, int len)
 {
     char *repl = buf;
@@ -841,9 +527,167 @@ selcopy(uint32_t serial)
     wlsetsel(getsel(), serial);
 }
 
+void
+kbdkeymap(void *data, struct wl_keyboard *keyboard, uint32_t format,
+          int32_t fd, uint32_t size)
+{
+    char *string;
 
+    if (format != WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1) {
+        close(fd);
+        return;
+    }
 
-/* Rendering stuff */
+    string = mmap(NULL, size, PROT_READ, MAP_SHARED, fd, 0);
+
+    if (string == MAP_FAILED) {
+        close(fd);
+        return;
+    }
+
+    wl.xkb.keymap = xkb_keymap_new_from_string(wl.xkb.ctx, string,
+            XKB_KEYMAP_FORMAT_TEXT_V1, 0);
+    munmap(string, size);
+    close(fd);
+    wl.xkb.state = xkb_state_new(wl.xkb.keymap);
+
+    wl.xkb.ctrl = xkb_keymap_mod_get_index(wl.xkb.keymap, XKB_MOD_NAME_CTRL);
+    wl.xkb.alt = xkb_keymap_mod_get_index(wl.xkb.keymap, XKB_MOD_NAME_ALT);
+    wl.xkb.shift = xkb_keymap_mod_get_index(wl.xkb.keymap, XKB_MOD_NAME_SHIFT);
+    wl.xkb.logo = xkb_keymap_mod_get_index(wl.xkb.keymap, XKB_MOD_NAME_LOGO);
+
+    wl.xkb.mods = 0;
+}
+
+void
+kbdenter(void *data, struct wl_keyboard *keyboard, uint32_t serial,
+         struct wl_surface *surface, struct wl_array *keys)
+{
+    win.state |= WIN_FOCUSED;
+    if (IS_SET(MODE_FOCUS))
+        ttywrite("\033[I", 3);
+    /* need to redraw the cursor */
+    needdraw = true;
+}
+
+void
+kbdleave(void *data, struct wl_keyboard *keyboard, uint32_t serial,
+     struct wl_surface *surface)
+{
+    /* selection offers are invalidated when we lose keyboard focus */
+    wl.seloffer = NULL;
+    win.state &= ~WIN_FOCUSED;
+    if (IS_SET(MODE_FOCUS))
+        ttywrite("\033[O", 3);
+    /* need to redraw the cursor */
+    needdraw = true;
+    /* disable key repeat */
+    repeat.len = 0;
+}
+
+void
+kbdkey(void *data, struct wl_keyboard *keyboard, uint32_t serial, uint32_t time,
+       uint32_t key, uint32_t state)
+{
+    xkb_keysym_t ksym;
+    char buf[32], *str;
+    int len;
+    Rune c;
+    Shortcut *bp;
+
+    if (IS_SET(MODE_KBDLOCK))
+        return;
+
+    if (state == WL_KEYBOARD_KEY_STATE_RELEASED) {
+        if (repeat.key == key)
+            repeat.len = 0;
+        return;
+    }
+
+    ksym = xkb_state_key_get_one_sym(wl.xkb.state, key + 8);
+    len = xkb_keysym_to_utf8(ksym, buf, sizeof buf);
+    if (len > 0)
+        --len;
+
+    /* 1. shortcuts */
+    for (bp = shortcuts; bp < shortcuts + shortcutslen; bp++) {
+        if (ksym == bp->keysym && match(bp->mod, wl.xkb.mods)) {
+            bp->func(&(bp->arg));
+            return;
+        }
+    }
+
+    /* 2. custom keys from config.h */
+    if ((str = kmap(ksym, wl.xkb.mods))) {
+        len = strlen(str);
+        goto send;
+    }
+
+    /* 3. composed string from input method */
+    if (len == 0)
+        return;
+    if (len == 1 && wl.xkb.mods & MOD_MASK_ALT) {
+        if (IS_SET(MODE_8BIT)) {
+            if (*buf < 0177) {
+                c = *buf | 0x80;
+                len = utf8encode(c, buf);
+            }
+        } else {
+            buf[1] = buf[0];
+            buf[0] = '\033';
+            len = 2;
+        }
+    }
+    /* convert character to control character */
+    else if (len == 1 && wl.xkb.mods & MOD_MASK_CTRL) {
+        if ((*buf >= '@' && *buf < '\177') || *buf == ' ')
+            *buf &= 0x1F;
+        else if (*buf == '2') *buf = '\000';
+        else if (*buf >= '3' && *buf <= '7')
+            *buf -= ('3' - '\033');
+        else if (*buf == '8') *buf = '\177';
+        else if (*buf == '/') *buf = '_' & 0x1F;
+    }
+
+    str = buf;
+
+send:
+    memcpy(repeat.str, str, len);
+    repeat.key = key;
+    repeat.len = len;
+    repeat.started = false;
+    clock_gettime(CLOCK_MONOTONIC, &repeat.last);
+    ttysend(str, len);
+}
+
+void
+kbdmodifiers(void *data, struct wl_keyboard *keyboard, uint32_t serial,
+             uint32_t dep, uint32_t lat, uint32_t lck, uint32_t group)
+{
+    xkb_mod_mask_t mod_mask;
+
+    xkb_state_update_mask(wl.xkb.state, dep, lat, lck, group, 0, 0);
+
+    mod_mask = xkb_state_serialize_mods(wl.xkb.state, XKB_STATE_MODS_EFFECTIVE);
+    wl.xkb.mods = 0;
+
+    if (mod_mask & (1 << wl.xkb.ctrl))
+        wl.xkb.mods |= MOD_MASK_CTRL;
+    if (mod_mask & (1 << wl.xkb.alt))
+        wl.xkb.mods |= MOD_MASK_ALT;
+    if (mod_mask & (1 << wl.xkb.shift))
+        wl.xkb.mods |= MOD_MASK_SHIFT;
+    if (mod_mask & (1 << wl.xkb.logo))
+        wl.xkb.mods |= MOD_MASK_LOGO;
+}
+
+void
+kbdrepeatinfo(void *data, struct wl_keyboard *keyboard, int32_t rate,
+              int32_t delay)
+{
+    keyrepeatdelay = delay;
+    keyrepeatinterval = 1000 / rate;
+}
 void
 wlresize(int col, int row)
 {
@@ -863,75 +707,6 @@ void
 wlsettitle(char *title)
 {
     xdg_toplevel_set_title(wl.xdgtoplevel, title);
-}
-
-void
-draw(void)
-{
-    int y, y0;
-
-    for (y = 0; y <= term.bot; ++y) {
-        if (!term.dirty[y])
-            continue;
-        for (y0 = y; y <= term.bot && term.dirty[y]; ++y);
-        wl_surface_damage(wl.surface, 0, borderpx + y0 * win.ch,
-                win.w, (y - y0) * win.ch);
-    }
-
-    wld_set_target_buffer(wld.renderer, wld.buffer);
-    drawregion(0, 0, term.col, term.row);
-    wl.framecb = wl_surface_frame(wl.surface);
-    wl_callback_add_listener(wl.framecb, &framelistener, NULL);
-    wld_flush(wld.renderer);
-    wl_surface_attach(wl.surface, wl.buffer, 0, 0);
-    wl_surface_commit(wl.surface);
-    /* need to wait to destroy the old buffer until we commit the new
-     * buffer */
-    if (wld.oldbuffer) {
-        wld_buffer_unreference(wld.oldbuffer);
-        wld.oldbuffer = 0;
-    }
-    needdraw = false;
-}
-
-void
-drawregion(int x1, int y1, int x2, int y2)
-{
-    int ic, ib, x, y, ox;
-    Glyph base, new;
-    char buf[DRAW_BUF_SIZ];
-    int ena_sel = sel.ob.x != -1 && sel.alt == IS_SET(MODE_ALTSCREEN);
-
-    for (y = y1; y < y2; y++) {
-        if (!term.dirty[y])
-            continue;
-
-        term.dirty[y] = 0;
-        base = term.line[y][0];
-        ic = ib = ox = 0;
-        for (x = x1; x < x2; x++) {
-            new = term.line[y][x];
-            if (new.mode == ATTR_WDUMMY)
-                continue;
-            if (ena_sel && selected(x, y))
-                new.mode ^= ATTR_REVERSE;
-            if (ib > 0 && (ATTRCMP(base, new)
-                    || ib >= DRAW_BUF_SIZ-UTF_SIZ)) {
-                wldraws(buf, base, ox, y, ic, ib);
-                ic = ib = 0;
-            }
-            if (ib == 0) {
-                ox = x;
-                base = new;
-            }
-
-            ib += utf8encode(new.u, buf+ib);
-            ic += (new.mode & ATTR_WIDE)? 2 : 1;
-        }
-        if (ib > 0)
-            wldraws(buf, base, ox, y, ic, ib);
-    }
-    wldrawcursor();
 }
 
 void
@@ -965,17 +740,6 @@ framedone(void *data, struct wl_callback *callback, uint32_t msecs)
     }
 }
 
-/*
- * Absolute coordinates.
- */
-void
-wlclear(int x1, int y1, int x2, int y2)
-{
-    uint32_t color = dc.col[IS_SET(MODE_REVERSE) ? defaultfg : defaultbg];
-
-    wld_fill_rectangle(wld.renderer, color, x1, y1, x2 - x1, y2 - y1);
-}
-
 void
 xdgsurfconfigure(void *data, struct xdg_surface *surf, uint32_t serial)
 {
@@ -1003,9 +767,12 @@ xdgtoplevelclose(void *data, struct xdg_toplevel *toplevel)
     exit(0);
 }
 
+void
+wmping(void *data, struct xdg_wm_base *wm, uint32_t serial)
+{
+    xdg_wm_base_pong(wm, serial);
+}
 
-
-/* Font stuff */
 uchar
 sixd_to_8bit(int x)
 {
@@ -1056,6 +823,7 @@ wlsetcolorname(int x, const char *name)
 
     if (!BETWEEN(x, 0, dc.collen))
         return 1;
+
 
     if (!wlloadcolor(x, name, &color))
         return 1;
@@ -1233,6 +1001,86 @@ wlunloadfonts(void)
     wlunloadfont(&dc.bfont);
     wlunloadfont(&dc.ifont);
     wlunloadfont(&dc.ibfont);
+}
+
+void
+draw(void)
+{
+    int y, y0;
+
+    for (y = 0; y <= term.bot; ++y) {
+        if (!term.dirty[y])
+            continue;
+        for (y0 = y; y <= term.bot && term.dirty[y]; ++y);
+        wl_surface_damage(wl.surface, 0, borderpx + y0 * win.ch,
+                win.w, (y - y0) * win.ch);
+    }
+
+    wld_set_target_buffer(wld.renderer, wld.buffer);
+    drawregion(0, 0, term.col, term.row);
+    wl.framecb = wl_surface_frame(wl.surface);
+    wl_callback_add_listener(wl.framecb, &framelistener, NULL);
+    wld_flush(wld.renderer);
+    wl_surface_attach(wl.surface, wl.buffer, 0, 0);
+    wl_surface_commit(wl.surface);
+    /* need to wait to destroy the old buffer until we commit the new
+     * buffer */
+    if (wld.oldbuffer) {
+        wld_buffer_unreference(wld.oldbuffer);
+        wld.oldbuffer = 0;
+    }
+    needdraw = false;
+}
+
+void
+drawregion(int x1, int y1, int x2, int y2)
+{
+    int ic, ib, x, y, ox;
+    Glyph base, new;
+    char buf[DRAW_BUF_SIZ];
+    int ena_sel = sel.ob.x != -1 && sel.alt == IS_SET(MODE_ALTSCREEN);
+
+    for (y = y1; y < y2; y++) {
+        if (!term.dirty[y])
+            continue;
+
+        term.dirty[y] = 0;
+        base = term.line[y][0];
+        ic = ib = ox = 0;
+        for (x = x1; x < x2; x++) {
+            new = term.line[y][x];
+            if (new.mode == ATTR_WDUMMY)
+                continue;
+            if (ena_sel && selected(x, y))
+                new.mode ^= ATTR_REVERSE;
+            if (ib > 0 && (ATTRCMP(base, new)
+                    || ib >= DRAW_BUF_SIZ-UTF_SIZ)) {
+                wldraws(buf, base, ox, y, ic, ib);
+                ic = ib = 0;
+            }
+            if (ib == 0) {
+                ox = x;
+                base = new;
+            }
+
+            ib += utf8encode(new.u, buf+ib);
+            ic += (new.mode & ATTR_WIDE)? 2 : 1;
+        }
+        if (ib > 0)
+            wldraws(buf, base, ox, y, ic, ib);
+    }
+    wldrawcursor();
+}
+
+/*
+ * Absolute coordinates.
+ */
+void
+wlclear(int x1, int y1, int x2, int y2)
+{
+    uint32_t color = dc.col[IS_SET(MODE_REVERSE) ? defaultfg : defaultbg];
+
+    wld_fill_rectangle(wld.renderer, color, x1, y1, x2 - x1, y2 - y1);
 }
 
 /*
@@ -1487,13 +1335,126 @@ wldrawglyph(Glyph g, int x, int y)
     wldraws(buf, g, x, y, width, len);
 }
 
-
-
-/* Technical stuff */
 void
-wmping(void *data, struct xdg_wm_base *wm, uint32_t serial)
+wlloadcursor(void)
 {
-    xdg_wm_base_pong(wm, serial);
+    char *names[] = { mouseshape, "xterm", "ibeam", "text" };
+    int i;
+
+    cursor.theme = wl_cursor_theme_load(NULL, 32, wl.shm);
+
+    for (i = 0; !cursor.cursor && i < LEN(names); i++)
+        cursor.cursor = wl_cursor_theme_get_cursor(cursor.theme, names[i]);
+
+    cursor.surface = wl_compositor_create_surface(wl.cmp);
+}
+
+void
+wldrawcursor(void)
+{
+    static int oldx = 0, oldy = 0;
+    int curx;
+    Glyph g = {' ', ATTR_NULL, defaultbg, defaultcs}, og;
+    int ena_sel = sel.ob.x != -1 && sel.alt == IS_SET(MODE_ALTSCREEN);
+    uint32_t drawcol;
+
+    LIMIT(oldx, 0, term.col-1);
+    LIMIT(oldy, 0, term.row-1);
+
+    curx = term.c.x;
+
+    /* adjust position if in dummy */
+    if (term.line[oldy][oldx].mode & ATTR_WDUMMY)
+        oldx--;
+    if (term.line[term.c.y][curx].mode & ATTR_WDUMMY)
+        curx--;
+
+    /* remove the old cursor */
+    og = term.line[oldy][oldx];
+    if (ena_sel && selected(oldx, oldy))
+        og.mode ^= ATTR_REVERSE;
+    wldrawglyph(og, oldx, oldy);
+    if (oldx != curx || oldy != term.c.y) {
+        wl_surface_damage(wl.surface, borderpx + oldx * win.cw,
+                borderpx + oldy * win.ch, win.cw, win.ch);
+    }
+
+    g.u = term.line[term.c.y][term.c.x].u;
+
+    /*
+     * Select the right color for the right mode.
+     */
+    if (IS_SET(MODE_REVERSE)) {
+        g.mode |= ATTR_REVERSE;
+        g.bg = defaultfg;
+        if (ena_sel && selected(term.c.x, term.c.y)) {
+            drawcol = dc.col[defaultcs];
+            g.fg = defaultrcs;
+        } else {
+            drawcol = dc.col[defaultrcs];
+            g.fg = defaultcs;
+        }
+    } else {
+        if (ena_sel && selected(term.c.x, term.c.y)) {
+            drawcol = dc.col[defaultrcs];
+            g.fg = defaultfg;
+            g.bg = defaultrcs;
+        } else {
+            drawcol = dc.col[defaultcs];
+        }
+    }
+
+    if (IS_SET(MODE_HIDE))
+        return;
+
+    /* draw the new one */
+    if (win.state & WIN_FOCUSED) {
+        switch (win.cursor) {
+        case 7: /* st-wl extension: snowman */
+            utf8decode("☃", &g.u, UTF_SIZ);
+        case 0: /* Blinking Block */
+        case 1: /* Blinking Block (Default) */
+        case 2: /* Steady Block */
+            g.mode |= term.line[term.c.y][curx].mode & ATTR_WIDE;
+            wldrawglyph(g, term.c.x, term.c.y);
+            break;
+        case 3: /* Blinking Underline */
+        case 4: /* Steady Underline */
+            wld_fill_rectangle(wld.renderer, drawcol,
+                    borderpx + curx * win.cw,
+                    borderpx + (term.c.y + 1) * win.ch - \
+                        cursorthickness,
+                    win.cw, cursorthickness);
+            break;
+        case 5: /* Blinking bar */
+        case 6: /* Steady bar */
+            wld_fill_rectangle(wld.renderer, drawcol,
+                    borderpx + curx * win.cw,
+                    borderpx + term.c.y * win.ch,
+                    cursorthickness, win.ch);
+            break;
+        }
+    } else {
+        wld_fill_rectangle(wld.renderer, drawcol,
+                borderpx + curx * win.cw,
+                borderpx + term.c.y * win.ch,
+                win.cw - 1, 1);
+        wld_fill_rectangle(wld.renderer, drawcol,
+                borderpx + curx * win.cw,
+                borderpx + term.c.y * win.ch,
+                1, win.ch - 1);
+        wld_fill_rectangle(wld.renderer, drawcol,
+                borderpx + (curx + 1) * win.cw - 1,
+                borderpx + term.c.y * win.ch,
+                1, win.ch - 1);
+        wld_fill_rectangle(wld.renderer, drawcol,
+                borderpx + curx * win.cw,
+                borderpx + (term.c.y + 1) * win.ch - 1,
+                win.cw, 1);
+    }
+    wl_surface_damage(wl.surface, borderpx + curx * win.cw,
+            borderpx + term.c.y * win.ch, win.cw, win.ch);
+    oldx = curx, oldy = term.c.y;
 }
 
 void

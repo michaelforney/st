@@ -1,4 +1,4 @@
-/* See LICENSE for license details. */
+
 
 /* Arbitrary sizes */
 #define UTF_SIZ       4
