@@ -38,12 +38,12 @@ static char worddelimiters[] = " ";
 unsigned int doubleclicktimeout = 300;
 unsigned int tripleclicktimeout = 600;
 
+/* alt screens */
+int allowaltscreen = 1;
+
 /* key repeat timeouts (in milliseconds) */
 unsigned int keyrepeatdelay = 500;
 unsigned int keyrepeatinterval = 25;
-
-/* alt screens */
-int allowaltscreen = 1;
 
 /*
  * blinking timeout (set to 0 to disable blinking) for the terminal blinking
@@ -82,7 +82,7 @@ char termname[] = "st-wl-256color";
  *
  *	stty tabs
  */
-unsigned int tabspaces = 8;
+static unsigned int tabspaces = 8;
 
 /* Terminal colors (16 first used in escape sequence) */
 const char *colorname[] = {
@@ -169,17 +169,20 @@ Axiskey ashortcuts[] = {
 #define MODKEY MOD_MASK_ALT
 
 Shortcut shortcuts[] = {
-	/* modifier                     key                     function        argument */
-	{ MOD_MASK_ANY,                 XKB_KEY_Break,          sendbreak,      {.i =  0} },
-	{ MOD_MASK_CTRL,                XKB_KEY_Print,          toggleprinter,  {.i =  0} },
-	{ MOD_MASK_SHIFT,               XKB_KEY_Print,          printscreen,    {.i =  0} },
-	{ MOD_MASK_ANY,                 XKB_KEY_Print,          printsel,       {.i =  0} },
-	{ MODKEY|MOD_MASK_SHIFT,        XKB_KEY_Prior,          wlzoom,         {.f = +1} },
-	{ MODKEY|MOD_MASK_SHIFT,        XKB_KEY_Next,           wlzoom,         {.f = -1} },
-	{ MODKEY|MOD_MASK_SHIFT,        XKB_KEY_Home,           wlzoomreset,    {.f =  0} },
-	{ MOD_MASK_SHIFT,               XKB_KEY_Insert,         selpaste,       {.i =  0} },
-	{ MODKEY,                       XKB_KEY_Num_Lock,       numlock,        {.i =  0} },
-	{ MODKEY,                       XKB_KEY_Control_L,      iso14755,       {.i =  0} },
+	/* modifier              key                function        argument */
+	{ MOD_MASK_ANY,          XKB_KEY_Break,     sendbreak,      {.i =  0} },
+	{ MOD_MASK_CTRL,         XKB_KEY_Print,     toggleprinter,  {.i =  0} },
+	{ MOD_MASK_SHIFT,        XKB_KEY_Print,     printscreen,    {.i =  0} },
+	{ MOD_MASK_ANY,          XKB_KEY_Print,     printsel,       {.i =  0} },
+	{ MODKEY|MOD_MASK_SHIFT, XKB_KEY_Prior,     zoom,           {.f = +1} },
+	{ MODKEY|MOD_MASK_SHIFT, XKB_KEY_Next,      zoom,           {.f = -1} },
+	{ MODKEY|MOD_MASK_SHIFT, XKB_KEY_Home,      zoomreset,      {.f =  0} },
+	{ MOD_MASK_SHIFT,        XKB_KEY_Insert,    selpaste,       {.i =  0} },
+    { MODKEY|MOD_MASK_SHIFT, XKB_KEY_Insert,    clippaste,      {.i =  0} },
+    { MODKEY|MOD_MASK_SHIFT, XKB_KEY_C,         clipcopy,       {.i =  0} },
+    { MODKEY|MOD_MASK_SHIFT, XKB_KEY_V,         clippaste,      {.i =  0} },
+	{ MODKEY,                XKB_KEY_Num_Lock,  numlock,        {.i =  0} },
+	{ MODKEY,                XKB_KEY_Control_L, iso14755,       {.i =  0} },
 };
 
 /*
@@ -211,10 +214,10 @@ Shortcut shortcuts[] = {
  * If you want keys other than the X11 function keys (0xFD00 - 0xFFFF)
  * to be mapped below, add them to this array.
  */
-xkb_keysym_t mappedkeys[] = { -1 };
+static xkb_keysym_t mappedkeys[] = { -1 };
 
 /* State bits to ignore when matching key or button events. */
-uint ignoremod = 0;
+static uint ignoremod = 0;
 
 /*
  * Override mouse-select while mask is active (when MODE_MOUSE is set).
@@ -227,7 +230,7 @@ uint forceselmod = MOD_MASK_SHIFT;
  * This is the huge key array which defines all compatibility to the Linux
  * world. Please decide about changes wisely.
  */
-Key key[] = {
+static Key key[] = {
 	/* keysym                mask             string      appkey appcursor crlf */
 	{ XKB_KEY_KP_Home,       MOD_MASK_SHIFT,  "\033[2J",       0,   -1,    0},
 	{ XKB_KEY_KP_Home,       MOD_MASK_SHIFT,  "\033[1;2H",     0,   +1,    0},

@@ -1,4 +1,4 @@
-
+/* See LICENSE for license details. */
 
 /* Arbitrary sizes */
 #define UTF_SIZ       4
@@ -188,8 +188,6 @@ typedef struct {
     char s[ESC_BUF_SIZ];
 } Axiskey;
 
-
-
 void die(const char *, ...);
 void redraw(void);
 
@@ -204,7 +202,7 @@ void ttyresize(void);
 void ttysend(char *, size_t);
 void ttywrite(const char *, size_t);
 
-void wlresettitle(void);
+void resettitle(void);
 
 char *kmap(xkb_keysym_t, uint);
 void cresize(int, int);
@@ -255,8 +253,8 @@ extern float chscale;
 extern unsigned int doubleclicktimeout;
 extern unsigned int tripleclicktimeout;
 extern int allowaltscreen;
-extern unsigned int xfps;
-extern unsigned int actionfps;
+// extern unsigned int xfps;
+// extern unsigned int actionfps;
 extern unsigned int cursorthickness;
 extern unsigned int blinktimeout;
 extern char termname[];
@@ -284,10 +282,5 @@ extern char ascii_printable[];
 
 extern unsigned int keyrepeatdelay;
 extern unsigned int keyrepeatinterval;
-extern unsigned int tabsspaces;
 extern Axiskey ashortcuts[];
 extern size_t ashortcutslen;
-extern xkb_keysym_t mappedkeys[];
-extern size_t mappedkeyslen;
-extern uint ignoremod;
-extern size_t keylen;

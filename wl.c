@@ -23,7 +23,7 @@
 
 #include "arg.h"
 #include "win.h"
-#include "st-wl.h"
+#include "st.h"
 #include "xdg-shell-client-protocol.h"
 
 #define DRAW_BUF_SIZ  20*1024
@@ -1620,7 +1620,7 @@ wlinit(void)
     wl_surface_commit(wl.surface);
 
     wl.xkb.ctx = xkb_context_new(0);
-    wlresettitle();
+    resettitle();
 }
 
 void

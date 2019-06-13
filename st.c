@@ -34,7 +34,7 @@
 
 char *argv0;
 #include "win.h"
-#include "st-wl.h"
+#include "st.h"
 
 #if   defined(__linux)
  #include <pty.h>
@@ -130,11 +130,11 @@ static void clipcopy(const Arg *);
 static void clippaste(const Arg *);
 static void numlock(const Arg *);
 static void selpaste(const Arg *);
-static void wlzoom(const Arg *);
-static void wlzoomabs(const Arg *);
-static void wlzoomreset(const Arg *);
+static void zoom(const Arg *);
+static void zoomabs(const Arg *);
+static void zoomreset(const Arg *);
 static void printsel(const Arg *);
-static void printscreen(const Arg *);
+static void printscreen(const Arg *) ;
 static void iso14755(const Arg *);
 static void toggleprinter(const Arg *);
 static void sendbreak(const Arg *);
@@ -2261,7 +2261,7 @@ eschandle(uchar ascii)
 		break;
 	case 'c': /* RIS -- Reset to inital state */
 		treset();
-		wlresettitle();
+		resettitle();
 		wlloadcols();
 		break;
 	case '=': /* DECPAM -- Application keypad */
@@ -2521,16 +2521,16 @@ tresize(int col, int row)
 }
 
 void
-wlzoom(const Arg *arg)
+zoom(const Arg *arg)
 {
 	Arg larg;
 
 	larg.f = usedfontsize + arg->f;
-	wlzoomabs(&larg);
+	zoomabs(&larg);
 }
 
 void
-wlzoomabs(const Arg *arg)
+zoomabs(const Arg *arg)
 {
 	wlunloadfonts();
 	wlloadfonts(usedfont, arg->f);
@@ -2543,18 +2543,18 @@ wlzoomabs(const Arg *arg)
 }
 
 void
-wlzoomreset(const Arg *arg)
+zoomreset(const Arg *arg)
 {
 	Arg larg;
 
 	if (defaultfontsize > 0) {
 		larg.f = defaultfontsize;
-		wlzoomabs(&larg);
+		zoomabs(&larg);
 	}
 }
 
 void
-wlresettitle(void)
+resettitle(void)
 {
     wlsettitle(opt_title ? opt_title : "st-wl");
 }
