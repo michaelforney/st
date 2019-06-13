@@ -1,58 +1,86 @@
 /* See LICENSE for license details. */
-#include <ctype.h>
 #include <errno.h>
-#include <fcntl.h>
-#include <limits.h>
-/* for BTN_* definitions */
-#include <linux/input.h>
 #include <locale.h>
-#include <pwd.h>
-#include <stdarg.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
 #include <signal.h>
 #include <stdint.h>
-#include <sys/ioctl.h>
-#include <sys/mman.h>
 #include <sys/select.h>
-#include <sys/stat.h>
-#include <sys/time.h>
-#include <sys/types.h>
-#include <sys/wait.h>
-#include <termios.h>
 #include <time.h>
 #include <unistd.h>
 #include <libgen.h>
+#include <fcntl.h>
+/* for BTN_* definitions */
+#include <linux/input.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/mman.h>
+
 #include <wayland-client.h>
 #include <wayland-cursor.h>
-#include <xkbcommon/xkbcommon.h>
 #include <wld/wld.h>
 #include <wld/wayland.h>
-#include <fontconfig/fontconfig.h>
+#include <xkbcommon/xkbcommon.h>
+//#include <fontconfig/fontconfig.h>
 #include <wchar.h>
 
 #include "arg.h"
+#include "win.h"
 #include "st-wl.h"
 #include "xdg-shell-client-protocol.h"
 
-
+//#include <ctype.h>
+//#include <limits.h>
+//#include <pwd.h>
+//#include <stdarg.h>
+//#include <stdio.h>
+//#include <sys/ioctl.h>
+//#include <sys/stat.h>
+//#include <sys/time.h>
+//#include <sys/types.h>
+//#include <sys/wait.h>
+//#include <termios.h>
 
 #define DRAW_BUF_SIZ  20*1024
 
 /* Macros */
 
-#define DIVCEIL(n, d)       (((n) + ((d) - 1)) / (d))
-#define TIMEDIFF(t1, t2)    ((t1.tv_sec-t2.tv_sec)*1000 + \
-                (t1.tv_nsec-t2.tv_nsec)/1E6)
-#define ATTRCMP(a, b)       ((a).mode != (b).mode || (a).fg != (b).fg || \
-                (a).bg != (b).bg)
-
-#define IS_TRUECOL(x)       (1 << 24 & (x))
-
 
 
 /* Type declarations */
+typedef struct {
+    struct xkb_context *ctx;
+    struct xkb_keymap *keymap;
+    struct xkb_state *state;
+    xkb_mod_index_t ctrl, alt, shift, logo;
+    unsigned int mods;
+} XKB;
+
+typedef struct {
+    struct wl_display *dpy;
+    struct wl_compositor *cmp;
+    struct wl_shm *shm;
+    struct wl_seat *seat;
+    struct wl_keyboard *keyboard;
+    struct wl_pointer *pointer;
+    struct wl_data_device_manager *datadevmanager;
+    struct wl_data_device *datadev;
+    struct wl_data_offer *seloffer;
+    struct wl_surface *surface;
+    struct wl_buffer *buffer;
+    struct xdg_wm_base *wm;
+    struct xdg_surface *xdgsurface;
+    struct xdg_toplevel *xdgtoplevel;
+    XKB xkb;
+    bool configured;
+    int px, py; /* pointer x and y */
+    //int tw, th; /* tty width and height */
+    //int w, h; /* window width and height */
+    //int ch; /* char height */
+    //int cw; /* char width  */
+    int vis;
+    //char state; /* focus, redraw, visible */
+    //int cursor; /* cursor style */
+    struct wl_callback * framecb;
+} Wayland;
 
 /* Font structure */
 typedef struct {
@@ -89,11 +117,17 @@ typedef struct {
     struct wld_buffer *buffer, *oldbuffer;
 } WLD;
 
+typedef struct {
+    char str[32];
+    uint32_t key;
+    int len;
+    bool started;
+    struct timespec last;
+} Repeat;
+
 
 
 /* Function declarations */
-static void run(void);
-
 static void kbdkeymap(void *, struct wl_keyboard *, uint32_t, int32_t, uint32_t);
 static void kbdenter(void *, struct wl_keyboard *, uint32_t,
                 struct wl_surface *, struct wl_array *);
@@ -116,7 +150,10 @@ static void ptrbutton(void *, struct wl_pointer *, uint32_t, uint32_t,
 static void ptraxis(void *, struct wl_pointer *, uint32_t, uint32_t,
                 wl_fixed_t);
 static void wlloadcursor(void);
+static void wldrawcursor(void);
+
 static void wlsetsel(char*, uint32_t);
+static void selcopy(uint32_t);
 
 
 
@@ -125,7 +162,9 @@ static int wlloadfont(Font *, FcPattern *);
 static void wlunloadfont(Font *f);
 static void wldrawglyph(Glyph, int, int);
 static void wlclear(int, int, int, int);
-static void drawregion(int, int, int, int);
+static void wldraws(char *, Glyph, int, int, int, int);
+static void framedone(void *, struct wl_callback *, uint32_t);
+
 
 
 static void regglobal(void *, struct wl_registry *, uint32_t, const char *,
@@ -175,9 +214,10 @@ static struct wl_data_source_listener datasrclistener =
 static struct wl_data_offer_listener dataofferlistener = { dataofferoffer };
 
 static DC dc;
+static Wayland wl;
 static WLD wld;
 static Cursor cursor;
-static int oldbutton   = 3; /* button event on startup: 3 = release */
+static Repeat repeat;
 static int oldx, oldy;
 
 
@@ -238,7 +278,7 @@ void
 kbdenter(void *data, struct wl_keyboard *keyboard, uint32_t serial,
          struct wl_surface *surface, struct wl_array *keys)
 {
-    wl.state |= WIN_FOCUSED;
+    win.state |= WIN_FOCUSED;
     if (IS_SET(MODE_FOCUS))
         ttywrite("\033[I", 3);
     /* need to redraw the cursor */
@@ -251,7 +291,7 @@ kbdleave(void *data, struct wl_keyboard *keyboard, uint32_t serial,
 {
     /* selection offers are invalidated when we lose keyboard focus */
     wl.seloffer = NULL;
-    wl.state &= ~WIN_FOCUSED;
+    win.state &= ~WIN_FOCUSED;
     if (IS_SET(MODE_FOCUS))
         ttywrite("\033[O", 3);
     /* need to redraw the cursor */
@@ -532,7 +572,7 @@ ptrbutton(void * data, struct wl_pointer * pointer, uint32_t serial,
     switch (state) {
     case WL_POINTER_BUTTON_STATE_RELEASED:
         if (button == BTN_MIDDLE) {
-            selpaste(NULL);
+            wlselpaste();
         } else if (button == BTN_LEFT) {
             if (sel.mode == SEL_READY) {
                 getbuttoninfo();
@@ -643,8 +683,8 @@ wldrawcursor(void)
         og.mode ^= ATTR_REVERSE;
     wldrawglyph(og, oldx, oldy);
     if (oldx != curx || oldy != term.c.y) {
-        wl_surface_damage(wl.surface, borderpx + oldx * wl.cw,
-                borderpx + oldy * wl.ch, wl.cw, wl.ch);
+        wl_surface_damage(wl.surface, borderpx + oldx * win.cw,
+                borderpx + oldy * win.ch, win.cw, win.ch);
     }
 
     g.u = term.line[term.c.y][term.c.x].u;
@@ -676,8 +716,8 @@ wldrawcursor(void)
         return;
 
     /* draw the new one */
-    if (wl.state & WIN_FOCUSED) {
-        switch (wl.cursor) {
+    if (win.state & WIN_FOCUSED) {
+        switch (win.cursor) {
         case 7: /* st-wl extension: snowman */
             utf8decode("☃", &g.u, UTF_SIZ);
         case 0: /* Blinking Block */
@@ -689,39 +729,39 @@ wldrawcursor(void)
         case 3: /* Blinking Underline */
         case 4: /* Steady Underline */
             wld_fill_rectangle(wld.renderer, drawcol,
-                    borderpx + curx * wl.cw,
-                    borderpx + (term.c.y + 1) * wl.ch - \
+                    borderpx + curx * win.cw,
+                    borderpx + (term.c.y + 1) * win.ch - \
                         cursorthickness,
-                    wl.cw, cursorthickness);
+                    win.cw, cursorthickness);
             break;
         case 5: /* Blinking bar */
         case 6: /* Steady bar */
             wld_fill_rectangle(wld.renderer, drawcol,
-                    borderpx + curx * wl.cw,
-                    borderpx + term.c.y * wl.ch,
-                    cursorthickness, wl.ch);
+                    borderpx + curx * win.cw,
+                    borderpx + term.c.y * win.ch,
+                    cursorthickness, win.ch);
             break;
         }
     } else {
         wld_fill_rectangle(wld.renderer, drawcol,
-                borderpx + curx * wl.cw,
-                borderpx + term.c.y * wl.ch,
-                wl.cw - 1, 1);
+                borderpx + curx * win.cw,
+                borderpx + term.c.y * win.ch,
+                win.cw - 1, 1);
         wld_fill_rectangle(wld.renderer, drawcol,
-                borderpx + curx * wl.cw,
-                borderpx + term.c.y * wl.ch,
-                1, wl.ch - 1);
+                borderpx + curx * win.cw,
+                borderpx + term.c.y * win.ch,
+                1, win.ch - 1);
         wld_fill_rectangle(wld.renderer, drawcol,
-                borderpx + (curx + 1) * wl.cw - 1,
-                borderpx + term.c.y * wl.ch,
-                1, wl.ch - 1);
+                borderpx + (curx + 1) * win.cw - 1,
+                borderpx + term.c.y * win.ch,
+                1, win.ch - 1);
         wld_fill_rectangle(wld.renderer, drawcol,
-                borderpx + curx * wl.cw,
-                borderpx + (term.c.y + 1) * wl.ch - 1,
-                wl.cw, 1);
+                borderpx + curx * win.cw,
+                borderpx + (term.c.y + 1) * win.ch - 1,
+                win.cw, 1);
     }
-    wl_surface_damage(wl.surface, borderpx + curx * wl.cw,
-            borderpx + term.c.y * wl.ch, wl.cw, wl.ch);
+    wl_surface_damage(wl.surface, borderpx + curx * win.cw,
+            borderpx + term.c.y * win.ch, win.cw, win.ch);
     oldx = curx, oldy = term.c.y;
 }
 
@@ -809,11 +849,11 @@ wlresize(int col, int row)
 {
     union wld_object object;
 
-    wl.tw = MAX(1, col * wl.cw);
-    wl.th = MAX(1, row * wl.ch);
+    win.tw = MAX(1, col * win.cw);
+    win.th = MAX(1, row * win.ch);
 
     wld.oldbuffer = wld.buffer;
-    wld.buffer = wld_create_buffer(wld.ctx, wl.w, wl.h,
+    wld.buffer = wld_create_buffer(wld.ctx, win.w, win.h,
             WLD_FORMAT_XRGB8888, 0);
     wld_export(wld.buffer, WLD_WAYLAND_OBJECT_BUFFER, &object);
     wl.buffer = object.ptr;
@@ -834,8 +874,8 @@ draw(void)
         if (!term.dirty[y])
             continue;
         for (y0 = y; y <= term.bot && term.dirty[y]; ++y);
-        wl_surface_damage(wl.surface, 0, borderpx + y0 * wl.ch,
-                wl.w, (y - y0) * wl.ch);
+        wl_surface_damage(wl.surface, 0, borderpx + y0 * win.ch,
+                win.w, (y - y0) * win.ch);
     }
 
     wld_set_target_buffer(wld.renderer, wld.buffer);
@@ -904,15 +944,15 @@ void
 surfenter(void *data, struct wl_surface *surface, struct wl_output *output)
 {
     wl.vis++;
-    if (!(wl.state & WIN_VISIBLE))
-        wl.state |= WIN_VISIBLE;
+    if (!(win.state & WIN_VISIBLE))
+        win.state |= WIN_VISIBLE;
 }
 
 void
 surfleave(void *data, struct wl_surface *surface, struct wl_output *output)
 {
     if (--wl.vis == 0)
-        wl.state &= ~WIN_VISIBLE;
+        win.state &= ~WIN_VISIBLE;
 }
 
 void
@@ -920,7 +960,7 @@ framedone(void *data, struct wl_callback *callback, uint32_t msecs)
 {
     wl_callback_destroy(callback);
     wl.framecb = NULL;
-    if (needdraw && wl.state & WIN_VISIBLE) {
+    if (needdraw && win.state & WIN_VISIBLE) {
         draw();
     }
 }
@@ -946,7 +986,7 @@ void
 xdgtoplevelconfigure(void *data, struct xdg_toplevel *toplevel,
                      int32_t w, int32_t h, struct wl_array *states)
 {
-    if (w == wl.w && h == wl.h)
+    if (w == win.w && h == win.h)
         return;
     cresize(w, h);
     if (wl.configured)
@@ -1152,8 +1192,8 @@ wlloadfonts(char *fontstr, double fontsize)
     }
 
     /* Setting character width and height. */
-    wl.cw = ceilf(dc.font.width * cwscale);
-    wl.ch = ceilf(dc.font.height * chscale);
+    win.cw = ceilf(dc.font.width * cwscale);
+    win.ch = ceilf(dc.font.height * chscale);
 
     FcPatternDel(pattern, FC_SLANT);
     FcPatternAddInteger(pattern, FC_SLANT, FC_SLANT_ITALIC);
@@ -1203,8 +1243,8 @@ wlunloadfonts(void)
 void
 wldraws(char *s, Glyph base, int x, int y, int charlen, int bytelen)
 {
-    int winx = borderpx + x * wl.cw, winy = borderpx + y * wl.ch,
-        width = charlen * wl.cw, xp, i;
+    int winx = borderpx + x * win.cw, winy = borderpx + y * win.ch,
+        width = charlen * win.cw, xp, i;
     int frcflags, charexists;
     int u8fl, u8fblen, u8cblen, doesexist;
     char *u8c, *u8fs;
@@ -1302,19 +1342,19 @@ wldraws(char *s, Glyph base, int x, int y, int charlen, int bytelen)
     /* Intelligent cleaning up of the borders. */
     if (x == 0) {
         wlclear(0, (y == 0)? 0 : winy, borderpx,
-            ((y >= term.row-1)? wl.h : (winy + wl.ch)));
+            ((y >= term.row-1)? win.h : (winy + win.ch)));
     }
     if (x + charlen >= term.col) {
-        wlclear(winx + width, (y == 0)? 0 : winy, wl.w,
-            ((y >= term.row-1)? wl.h : (winy + wl.ch)));
+        wlclear(winx + width, (y == 0)? 0 : winy, win.w,
+            ((y >= term.row-1)? win.h : (winy + win.ch)));
     }
     if (y == 0)
         wlclear(winx, 0, winx + width, borderpx);
     if (y == term.row-1)
-        wlclear(winx, winy + wl.ch, winx + width, wl.h);
+        wlclear(winx, winy + win.ch, winx + width, win.h);
 
     /* Clean up the region we want to draw to. */
-    wld_fill_rectangle(wld.renderer, bg, winx, winy, width, wl.ch);
+    wld_fill_rectangle(wld.renderer, bg, winx, winy, width, win.ch);
 
     for (xp = winx; bytelen > 0;) {
         /*
@@ -1326,7 +1366,7 @@ wldraws(char *s, Glyph base, int x, int y, int charlen, int bytelen)
         u8fs = s;
         u8fblen = 0;
         u8fl = 0;
-        oneatatime = font->width != wl.cw;
+        oneatatime = font->width != win.cw;
         for (;;) {
             u8c = s;
             u8cblen = utf8decode(s, &unicodep, UTF_SIZ);
@@ -1346,7 +1386,7 @@ wldraws(char *s, Glyph base, int x, int y, int charlen, int bytelen)
                         font->match, fg, xp,
                         winy + font->ascent,
                         u8fs, u8fblen, NULL);
-                xp += wl.cw * u8fl;
+                xp += win.cw * u8fl;
             }
             break;
         }
@@ -1423,7 +1463,7 @@ wldraws(char *s, Glyph base, int x, int y, int charlen, int bytelen)
                 xp, winy + frc[i].font->ascent,
                 u8c, u8cblen, NULL);
 
-        xp += wl.cw * wcwidth(unicodep);
+        xp += win.cw * wcwidth(unicodep);
     }
 
     if (base.mode & ATTR_UNDERLINE) {
@@ -1604,8 +1644,8 @@ wlinit(void)
     wlloadcursor();
 
     wl.vis = 0;
-    wl.h = 2 * borderpx + term.row * wl.ch;
-    wl.w = 2 * borderpx + term.col * wl.cw;
+    win.h = 2 * borderpx + term.row * win.ch;
+    win.w = 2 * borderpx + term.col * win.cw;
 
     wl.surface = wl_compositor_create_surface(wl.cmp);
     wl_surface_add_listener(wl.surface, &surflistener, NULL);
@@ -1633,7 +1673,7 @@ run(void)
     /* Look for initial configure. */
     wl_display_roundtrip(wl.dpy);
     if (!wl.configured)
-        cresize(wl.w, wl.h);
+        cresize(win.w, win.h);
     ttynew();
     ttyresize();
     draw();
@@ -1693,7 +1733,7 @@ run(void)
             }
         }
 
-        if (needdraw && wl.state & WIN_VISIBLE) {
+        if (needdraw && win.state & WIN_VISIBLE) {
             if (!wl.framecb) {
                 draw();
             }
@@ -1715,7 +1755,7 @@ run(void)
 int
 main(int argc, char *argv[])
 {
-    wl.cursor = cursorshape;
+    win.cursor = cursorshape;
 
     ARGBEGIN {
     case 'a':

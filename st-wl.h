@@ -1,222 +1,25 @@
+/* See LICENSE for license details. */
 
 /* Arbitrary sizes */
 #define UTF_SIZ       4
 #define ESC_BUF_SIZ   (128*UTF_SIZ)
-
-#define MOD_MASK_ANY    UINT_MAX
-#define MOD_MASK_NONE   0
-#define MOD_MASK_CTRL   (1<<0)
-#define MOD_MASK_ALT    (1<<1)
-#define MOD_MASK_SHIFT  (1<<2)
-#define MOD_MASK_LOGO   (1<<3)
-
-#define AXIS_VERTICAL   WL_POINTER_AXIS_VERTICAL_SCROLL
-
-
-
-/* Macros */
+/* macros */
+#define MIN(a, b)       ((a) < (b) ? (a) : (b))
+#define MAX(a, b)       ((a) < (b) ? (b) : (a))
 #define LEN(a)          (sizeof(a) / sizeof(a)[0])
 #define BETWEEN(x, a, b)    ((a) <= (x) && (x) <= (b))
-#define MAX(a, b)       ((a) < (b) ? (b) : (a))
-#define MIN(a, b)       ((a) < (b) ? (a) : (b))
-#define MODBIT(x, set, bit) ((set) ? ((x) |= (bit)) : ((x) &= ~(bit)))
+#define DIVCEIL(n, d)       (((n) + ((d) - 1)) / (d))
 #define LIMIT(x, a, b)      (x) = (x) < (a) ? (a) : (x) > (b) ? (b) : (x)
+#define ATTRCMP(a, b)       ((a).mode != (b).mode || (a).fg != (b).fg || \
+                (a).bg != (b).bg)
 #define IS_SET(flag)        ((term.mode & (flag)) != 0)
+#define TIMEDIFF(t1, t2)    ((t1.tv_sec-t2.tv_sec)*1000 + \
+                (t1.tv_nsec-t2.tv_nsec)/1E6)
+#define MODBIT(x, set, bit) ((set) ? ((x) |= (bit)) : ((x) &= ~(bit)))
 
 #define TRUECOLOR(r,g,b)    (1 << 24 | (r) << 16 | (g) << 8 | (b))
+#define IS_TRUECOL(x)       (1 << 24 & (x))
 
-
-/* type declarations */
-typedef unsigned char uchar;
-typedef unsigned int uint;
-typedef unsigned long ulong;
-typedef unsigned short ushort;
-
-typedef uint_least32_t Rune;
-
-typedef struct {
-    Rune u;           /* character code */
-    ushort mode;      /* attribute flags */
-    uint32_t fg;      /* foreground  */
-    uint32_t bg;      /* background  */
-} Glyph;
-
-typedef Glyph *Line;
-
-typedef struct {
-    Glyph attr; /* current char attributes */
-    int x;
-    int y;
-    char state;
-} TCursor;
-
-typedef union {
-    int i;
-    uint ui;
-    float f;
-    const void *v;
-} Arg;
-
-typedef struct {
-    uint mod;
-    xkb_keysym_t keysym;
-    void (*func)(const Arg *);
-    const Arg arg;
-} Shortcut;
-
-/* Internal representation of the screen */
-typedef struct {
-    int row;      /* nb row */
-    int col;      /* nb col */
-    Line *line;   /* screen */
-    Line *alt;    /* alternate screen */
-    int *dirty;  /* dirtyness of lines */
-    TCursor c;    /* cursor */
-    int top;      /* top    scroll limit */
-    int bot;      /* bottom scroll limit */
-    int mode;     /* terminal mode flags */
-    int esc;      /* escape state flags */
-    char trantbl[4]; /* charset table translation */
-    int charset;  /* current charset */
-    int icharset; /* selected charset for sequence */
-    int numlock; /* lock numbers in keyboard */
-    int *tabs;
-} Term;
-
-typedef struct {
-    struct xkb_context *ctx;
-    struct xkb_keymap *keymap;
-    struct xkb_state *state;
-    xkb_mod_index_t ctrl, alt, shift, logo;
-    unsigned int mods;
-} XKB;
-
-typedef struct {
-    uint b;
-    uint mask;
-    char *s;
-} MouseShortcut;
-
-typedef struct {
-    int axis;
-    int dir;
-    uint mask;
-    char s[ESC_BUF_SIZ];
-} Axiskey;
-
-typedef struct {
-    struct wl_display *dpy;
-    struct wl_compositor *cmp;
-    struct wl_shm *shm;
-    struct wl_seat *seat;
-    struct wl_keyboard *keyboard;
-    struct wl_pointer *pointer;
-    struct wl_data_device_manager *datadevmanager;
-    struct wl_data_device *datadev;
-    struct wl_data_offer *seloffer;
-    struct wl_surface *surface;
-    struct wl_buffer *buffer;
-    struct xdg_wm_base *wm;
-    struct xdg_surface *xdgsurface;
-    struct xdg_toplevel *xdgtoplevel;
-    XKB xkb;
-    bool configured;
-    int px, py; /* pointer x and y */
-    int tw, th; /* tty width and height */
-    int w, h; /* window width and height */
-    int ch; /* char height */
-    int cw; /* char width  */
-    int vis;
-    char state; /* focus, redraw, visible */
-    int cursor; /* cursor style */
-    struct wl_callback * framecb;
-} Wayland;
-
-typedef struct {
-    char str[32];
-    uint32_t key;
-    int len;
-    bool started;
-    struct timespec last;
-} Repeat;
-
-typedef struct {
-    int mode;
-    int type;
-    int snap;
-    /*
-     * Selection variables:
-     * nb – normalized coordinates of the beginning of the selection
-     * ne – normalized coordinates of the end of the selection
-     * ob – original coordinates of the beginning of the selection
-     * oe – original coordinates of the end of the selection
-     */
-    struct {
-        int x, y;
-    } nb, ne, ob, oe;
-
-    char *primary;
-    struct wl_data_source *source;
-    int alt;
-    uint32_t tclick1, tclick2;
-} Selection;
-
-
-
-
-/* function declarations */
-void *xmalloc(size_t);
-
-size_t utf8decode(char *, Rune *, size_t);
-size_t utf8encode(Rune, char *);
-void usage(void);
-char *kmap(xkb_keysym_t, uint);
-void cresize(int, int);
-int match(uint, uint);
-void ttynew(void);
-void ttysend(char *, size_t);
-size_t ttyread(void);
-void ttywrite(const char *, size_t);
-void ttyresize(void);
-void draw(void);
-int cmdfd;
-void die(const char *, ...);
-void redraw(void);
-
-int tattrset(int);
-void tsetdirtattr(int);
-void tsetdirt(int, int);
-
-char *xstrdup(char *);
-void tnew(int, int);
-
-void selinit(void);
-void selnormalize(void);
-void selclear(void);
-void selcopy(uint32_t);
-int selected(int, int);
-char *getsel(void);
-int x2col(int);
-int y2row(int);
-
-
-void wlsettitle(char *);
-void wlresettitle(void);
-void wlinit(void);
-void wlresize(int, int);
-void wlloadcols(void);
-int wlsetcolorname(int, const char *);
-void wlloadfonts(char *, double);
-void wlunloadfonts(void);
-void wldrawcursor(void);
-void wldraws(char *, Glyph, int, int, int, int);
-void wlseturgency(int);
-void framedone(void *, struct wl_callback *, uint32_t);
-void wlselpaste(void);
-
-
-
-/* global variables */
 enum glyph_attribute {
     ATTR_NULL       = 0,
     ATTR_BOLD       = 1 << 0,
@@ -282,28 +85,167 @@ enum window_state {
     WIN_FOCUSED = 2
 };
 
-pid_t pid;
-Wayland wl;
-Term term;
-Repeat repeat;
-Selection sel;
+typedef unsigned char uchar;
+typedef unsigned int uint;
+typedef unsigned long ulong;
+typedef unsigned short ushort;
 
-bool needdraw;
+typedef uint_least32_t Rune;
 
-char **opt_cmd;
-char *opt_class;
-char *opt_embed;
-char *opt_font;
-char *opt_io;
-char *opt_line;
-char *opt_name;
-char *opt_title;
+typedef struct {
+    Rune u;           /* character code */
+    ushort mode;      /* attribute flags */
+    uint32_t fg;      /* foreground  */
+    uint32_t bg;      /* background  */
+} Glyph;
 
-char *usedfont;
-double usedfontsize;
-double defaultfontsize;
+typedef Glyph *Line;
+
+typedef struct {
+    Glyph attr; /* current char attributes */
+    int x;
+    int y;
+    char state;
+} TCursor;
+
+/* Internal representation of the screen */
+typedef struct {
+    int row;      /* nb row */
+    int col;      /* nb col */
+    Line *line;   /* screen */
+    Line *alt;    /* alternate screen */
+    int *dirty;  /* dirtyness of lines */
+    //GlyphFontSpec *specbuf; /* font spec buffer used for rendering (deprecated on wayland)*/
+    TCursor c;    /* cursor */
+    int top;      /* top    scroll limit */
+    int bot;      /* bottom scroll limit */
+    int mode;     /* terminal mode flags */
+    int esc;      /* escape state flags */
+    char trantbl[4]; /* charset table translation */
+    int charset;  /* current charset */
+    int icharset; /* selected charset for sequence */
+    int numlock; /* lock numbers in keyboard */
+    int *tabs;
+} Term;
+
+/* Purely graphic info */
+typedef struct {
+    int tw, th; /* tty width and height */
+    int w, h; /* window width and height */
+    int ch; /* char height */
+    int cw; /* char width  */
+    char state; /* focus, redraw, visible */
+    int cursor; /* cursor style */
+} TermWindow;
+
+typedef struct {
+    uint b;
+    uint mask;
+    char *s;
+} MouseShortcut;
+
+typedef struct {
+    int mode;
+    int type;
+    int snap;
+    /*
+     * Selection variables:
+     * nb – normalized coordinates of the beginning of the selection
+     * ne – normalized coordinates of the end of the selection
+     * ob – original coordinates of the beginning of the selection
+     * oe – original coordinates of the end of the selection
+     */
+    struct {
+        int x, y;
+    } nb, ne, ob, oe;
+
+    char *primary; //*clipboard, deprecated on wayland
+    int alt;
+    uint32_t tclick1;
+    uint32_t tclick2;
+
+    struct wl_data_source *source;
+} Selection;
+
+typedef union {
+    int i;
+    uint ui;
+    float f;
+    const void *v;
+} Arg;
+
+typedef struct {
+    uint mod;
+    xkb_keysym_t keysym;
+    void (*func)(const Arg *);
+    const Arg arg;
+} Shortcut;
+
+typedef struct {
+    int axis;
+    int dir;
+    uint mask;
+    char s[ESC_BUF_SIZ];
+} Axiskey;
 
 
+
+void die(const char *, ...);
+void redraw(void);
+
+int tattrset(int);
+void tnew(int, int);
+void tsetdirt(int, int);
+void tsetdirtattr(int);
+int match(uint, uint);
+void ttynew(void);
+size_t ttyread(void);
+void ttyresize(void);
+void ttysend(char *, size_t);
+void ttywrite(const char *, size_t);
+
+void wlresettitle(void);
+
+char *kmap(xkb_keysym_t, uint);
+void cresize(int, int);
+void selclear(void);
+
+void selinit(void);
+void selnormalize(void);
+int selected(int, int);
+char *getsel(void);
+int x2col(int);
+int y2row(int);
+
+size_t utf8decode(char *, Rune *, size_t);
+size_t utf8encode(Rune, char *);
+
+void *xmalloc(size_t);
+char *xstrdup(char *);
+
+void usage(void);
+
+/* Globals */
+extern TermWindow win;
+extern Term term;
+extern Selection sel;
+extern int cmdfd;
+extern pid_t pid;
+extern char **opt_cmd;
+extern char *opt_class;
+extern char *opt_embed;
+extern char *opt_font;
+extern char *opt_io;
+extern char *opt_line;
+extern char *opt_name;
+extern char *opt_title;
+extern int oldbutton;
+
+extern char *usedfont;
+extern double usedfontsize;
+extern double defaultfontsize;
+
+extern bool needdraw;
 
 /* config.h globals */
 extern char font[];
@@ -312,18 +254,14 @@ extern float cwscale;
 extern float chscale;
 extern unsigned int doubleclicktimeout;
 extern unsigned int tripleclicktimeout;
-extern unsigned int keyrepeatdelay;
-extern unsigned int keyrepeatinterval;
 extern int allowaltscreen;
 extern unsigned int xfps;
 extern unsigned int actionfps;
 extern unsigned int cursorthickness;
 extern unsigned int blinktimeout;
 extern char termname[];
-extern unsigned int tabsspaces;
 extern const char *colorname[];
 extern size_t colornamelen;
-extern size_t maxcolornamelen;
 extern unsigned int defaultfg;
 extern unsigned int defaultbg;
 extern unsigned int defaultcs;
@@ -336,19 +274,20 @@ extern unsigned int mousefg;
 extern unsigned int mousebg;
 extern unsigned int defaultattr;
 extern MouseShortcut mshortcuts[];
-extern Axiskey ashortcuts[];
-extern size_t ashortcutslen;
 extern size_t mshortcutslen;
 extern Shortcut shortcuts[];
 extern size_t shortcutslen;
-extern xkb_keysym_t mappedkeys[];
-extern size_t mappedkeyslen;
 extern uint forceselmod;
 extern uint selmasks[];
 extern size_t selmaskslen;
 extern char ascii_printable[];
+
+extern unsigned int keyrepeatdelay;
+extern unsigned int keyrepeatinterval;
+extern unsigned int tabsspaces;
+extern Axiskey ashortcuts[];
+extern size_t ashortcutslen;
+extern xkb_keysym_t mappedkeys[];
+extern size_t mappedkeyslen;
 extern uint ignoremod;
 extern size_t keylen;
-
-/* function definitions used in config.h */
-void selpaste(const Arg *);

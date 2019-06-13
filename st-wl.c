@@ -31,15 +31,9 @@
 
 /* Wayland */
 #include <wayland-client.h>
-//#include <wayland-cursor.h>
-//#include "xdg-shell-client-protocol.h"
-//#include <wld/wld.h>
-//#include <wld/wayland.h>
-
-//#include "arg.h"
 
 char *argv0;
-
+#include "win.h"
 #include "st-wl.h"
 
 #if   defined(__linux)
@@ -52,7 +46,7 @@ char *argv0;
 
 /* Arbitrary sizes */
 #define UTF_INVALID   0xFFFD
-#define ESC_BUF_SIZ   (128*UTF_SIZ)
+// #define ESC_BUF_SIZ   (128*UTF_SIZ) // Required in st-wl.h
 #define ESC_ARG_SIZ   16
 #define STR_BUF_SIZ   ESC_BUF_SIZ
 #define STR_ARG_SIZ   ESC_ARG_SIZ
@@ -135,7 +129,7 @@ typedef struct {
 static void clipcopy(const Arg *);
 static void clippaste(const Arg *);
 static void numlock(const Arg *);
-// static void selpaste(const Arg *); // Used in wl.c, defined in st-wl.h
+static void selpaste(const Arg *);
 static void wlzoom(const Arg *);
 static void wlzoomabs(const Arg *);
 static void wlzoomreset(const Arg *);
@@ -208,7 +202,7 @@ static ssize_t xwrite(int, const char *, size_t);
 static void *xrealloc(void *, size_t);
 
 /* Globals */
-Wayland wl; // TermWindow win
+TermWindow win;
 Term term;
 Selection sel;
 int cmdfd;
@@ -395,7 +389,7 @@ int
 x2col(int x)
 {
     x -= borderpx;
-    x /= wl.cw;
+    x /= win.cw;
 
     return LIMIT(x, 0, term.col-1);
 }
@@ -404,7 +398,7 @@ int
 y2row(int y)
 {
     y -= borderpx;
-    y /= wl.ch;
+    y /= win.ch;
 
     return LIMIT(y, 0, term.row-1);
 }
@@ -665,7 +659,7 @@ execsh(void)
 	setenv("SHELL", sh, 1);
 	setenv("HOME", pw->pw_dir, 1);
 	setenv("TERM", termname, 1);
-    // xsetenv();
+    // xsetenv(); // Removed in wayland version
 
 	signal(SIGCHLD, SIG_DFL);
 	signal(SIGHUP, SIG_DFL);
@@ -904,8 +898,8 @@ ttyresize(void)
 
 	w.ws_row = term.row;
 	w.ws_col = term.col;
-	w.ws_xpixel = wl.tw;
-	w.ws_ypixel = wl.th;
+	w.ws_xpixel = win.tw;
+	w.ws_ypixel = win.th;
 	if (ioctl(cmdfd, TIOCSWINSZ, &w) < 0)
 		fprintf(stderr, "Couldn't set window size: %s\n", strerror(errno));
 }
@@ -1480,22 +1474,22 @@ tsetmode(int priv, int set, int *args, int narg)
 				MODBIT(term.mode, !set, MODE_HIDE);
 				break;
 			case 9:    /* X10 mouse compatibility mode */
-                // xsetpointermotion(0);
+                // xsetpointermotion(0); // Removed in wayland version
 				MODBIT(term.mode, 0, MODE_MOUSE);
 				MODBIT(term.mode, set, MODE_MOUSEX10);
 				break;
 			case 1000: /* 1000: report button press */
-                // xsetpointermotion(0);
+                // xsetpointermotion(0); // Removed in wayland version
 				MODBIT(term.mode, 0, MODE_MOUSE);
 				MODBIT(term.mode, set, MODE_MOUSEBTN);
 				break;
 			case 1002: /* 1002: report motion on button press */
-                // xsetpointermotion(0);
+                // xsetpointermotion(0); // Removed in wayland version
 				MODBIT(term.mode, 0, MODE_MOUSE);
 				MODBIT(term.mode, set, MODE_MOUSEMOTION);
 				break;
 			case 1003: /* 1003: enable all mouse motions */
-                // xsetpointermotion(0);
+                // xsetpointermotion(0); // Removed in wayland version
 				MODBIT(term.mode, 0, MODE_MOUSE);
 				MODBIT(term.mode, set, MODE_MOUSEMANY);
 				break;
@@ -1775,7 +1769,7 @@ csihandle(void)
 			if (!BETWEEN(csiescseq.arg[0], 0, 6)) {
 				goto unknown;
 			}
-			wl.cursor = csiescseq.arg[0];
+			win.cursor = csiescseq.arg[0];
 			break;
 		default:
 			goto unknown;
@@ -2132,7 +2126,7 @@ tcontrolcode(uchar ascii)
 			/* backwards compatibility to xterm */
 			strhandle();
 		} else {
-			if (!(wl.state & WIN_FOCUSED))
+			if (!(win.state & WIN_FOCUSED))
 				wlseturgency(1);
 			// if (bellvolume) // XXX: No bell on wayland
             //     XkbBell(xw.dpy, xw.win, bellvolume, (Atom)NULL);
@@ -2475,7 +2469,7 @@ tresize(int col, int row)
 		free(term.alt[i]);
 	}
 
-    /* resize to new width */
+    /* resize to new width */  // Removed in wayland version
     // term.specbuf = xrealloc(term.specbuf, col * sizeof(GlyphFontSpec));
 
 	/* resize to new height */
@@ -2630,12 +2624,12 @@ cresize(int width, int height)
 	int col, row;
 
 	if (width != 0)
-		wl.w = width;
+		win.w = width;
 	if (height != 0)
-		wl.h = height;
+		win.h = height;
 
-	col = (wl.w - 2 * borderpx) / wl.cw;
-	row = (wl.h - 2 * borderpx) / wl.ch;
+	col = (win.w - 2 * borderpx) / win.cw;
+	row = (win.h - 2 * borderpx) / win.ch;
 
 	tresize(col, row);
 	wlresize(col, row);
