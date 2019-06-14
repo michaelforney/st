@@ -20,6 +20,46 @@ static char *argv0;
 #include "st.h"
 #include "win.h"
 
+/* types used in config.h */
+typedef struct {
+	uint mod;
+	KeySym keysym;
+	void (*func)(const Arg *);
+	const Arg arg;
+} Shortcut;
+
+typedef struct {
+	uint b;
+	uint mask;
+	char *s;
+} MouseShortcut;
+
+typedef struct {
+	KeySym k;
+	uint mask;
+	char *s;
+	/* three valued logic variables: 0 indifferent, 1 on, -1 off */
+	signed char appkey;    /* application keypad */
+	signed char appcursor; /* application cursor */
+	signed char crlf;      /* crlf mode          */
+} Key;
+
+/* X modifiers */
+#define XK_ANY_MOD    UINT_MAX
+#define XK_NO_MOD     0
+#define XK_SWITCH_MOD (1<<13)
+
+/* function definitions used in config.h */
+static void clipcopy(const Arg *);
+static void clippaste(const Arg *);
+static void selpaste(const Arg *);
+static void zoom(const Arg *);
+static void zoomabs(const Arg *);
+static void zoomreset(const Arg *);
+
+/* config.h for applying patches and the configuration. */
+#include "config.h"
+
 /* XEMBED messages */
 #define XEMBED_FOCUS_IN  4
 #define XEMBED_FOCUS_OUT 5
@@ -54,6 +94,9 @@ typedef struct {
 
 typedef struct {
 	Atom xtarget;
+	char *primary, *clipboard;
+	struct timespec tclick1;
+	struct timespec tclick2;
 } XSelection;
 
 /* Font structure */
@@ -113,8 +156,8 @@ static void propnotify(XEvent *);
 static void selnotify(XEvent *);
 static void selclear_(XEvent *);
 static void selrequest(XEvent *);
-static void selcopy(Time);
-static void getbuttoninfo(XEvent *);
+static void setsel(char *, Time);
+static void mousesel(XEvent *, int);
 static void mousereport(XEvent *);
 static char *kmap(KeySym, uint);
 static int match(uint, uint);
@@ -152,6 +195,7 @@ static void (*handler[LASTEvent])(XEvent *) = {
 static DC dc;
 static XWindow xw;
 static XSelection xsel;
+static TermWindow win;
 
 enum window_state {
 	WIN_VISIBLE = 1,
@@ -189,6 +233,38 @@ static char *opt_name  = NULL;
 static char *opt_title = NULL;
 
 void
+clipcopy(const Arg *dummy)
+{
+	Atom clipboard;
+
+	if (xsel.clipboard != NULL)
+		free(xsel.clipboard);
+
+	if (xsel.primary != NULL) {
+		xsel.clipboard = xstrdup(xsel.primary);
+		clipboard = XInternAtom(xw.dpy, "CLIPBOARD", 0);
+		XSetSelectionOwner(xw.dpy, clipboard, xw.win, CurrentTime);
+	}
+}
+
+void
+clippaste(const Arg *dummy)
+{
+	Atom clipboard;
+
+	clipboard = XInternAtom(xw.dpy, "CLIPBOARD", 0);
+	XConvertSelection(xw.dpy, clipboard, xsel.xtarget, clipboard,
+			xw.win, CurrentTime);
+}
+
+void
+selpaste(const Arg *dummy)
+{
+	XConvertSelection(xw.dpy, XA_PRIMARY, xsel.xtarget, XA_PRIMARY,
+			xw.win, CurrentTime);
+}
+
+void
 zoom(const Arg *arg)
 {
 	Arg larg;
@@ -203,7 +279,6 @@ zoomabs(const Arg *arg)
 	xunloadfonts();
 	xloadfonts(usedfont, arg->f);
 	cresize(0, 0);
-	ttyresize(win.tw, win.th);
 	redraw();
 	xhints();
 }
@@ -238,24 +313,20 @@ y2row(int y)
 }
 
 void
-getbuttoninfo(XEvent *e)
+mousesel(XEvent *e, int done)
 {
-	int type;
+	int type, seltype = SEL_REGULAR;
 	uint state = e->xbutton.state & ~(Button1Mask | forceselmod);
 
-	sel.alt = IS_SET(MODE_ALTSCREEN);
-
-	sel.oe.x = x2col(e->xbutton.x);
-	sel.oe.y = y2row(e->xbutton.y);
-	selnormalize();
-
-	sel.type = SEL_REGULAR;
-	for (type = 1; type < selmaskslen; ++type) {
+	for (type = 1; type < LEN(selmasks); ++type) {
 		if (match(selmasks[type], state)) {
-			sel.type = type;
+			seltype = type;
 			break;
 		}
 	}
+	selextend(x2col(e->xbutton.x), y2row(e->xbutton.y), seltype, done);
+	if (done)
+		setsel(getsel(), e->xbutton.time);
 }
 
 void
@@ -319,7 +390,7 @@ mousereport(XEvent *e)
 		return;
 	}
 
-	ttywrite(buf, len);
+	ttywrite(buf, len, 0);
 }
 
 void
@@ -327,55 +398,39 @@ bpress(XEvent *e)
 {
 	struct timespec now;
 	MouseShortcut *ms;
+	int snap;
 
 	if (IS_SET(MODE_MOUSE) && !(e->xbutton.state & forceselmod)) {
 		mousereport(e);
 		return;
 	}
 
-	for (ms = mshortcuts; ms < mshortcuts + mshortcutslen; ms++) {
+	for (ms = mshortcuts; ms < mshortcuts + LEN(mshortcuts); ms++) {
 		if (e->xbutton.button == ms->b
 				&& match(ms->mask, e->xbutton.state)) {
-			ttysend(ms->s, strlen(ms->s));
+			ttywrite(ms->s, strlen(ms->s), 1);
 			return;
 		}
 	}
 
 	if (e->xbutton.button == Button1) {
-		clock_gettime(CLOCK_MONOTONIC, &now);
-
-		/* Clear previous selection, logically and visually. */
-		selclear_(NULL);
-		sel.mode = SEL_EMPTY;
-		sel.type = SEL_REGULAR;
-		sel.oe.x = sel.ob.x = x2col(e->xbutton.x);
-		sel.oe.y = sel.ob.y = y2row(e->xbutton.y);
-
 		/*
 		 * If the user clicks below predefined timeouts specific
 		 * snapping behaviour is exposed.
 		 */
-		if (TIMEDIFF(now, sel.tclick2) <= tripleclicktimeout) {
-			sel.snap = SNAP_LINE;
-		} else if (TIMEDIFF(now, sel.tclick1) <= doubleclicktimeout) {
-			sel.snap = SNAP_WORD;
+		clock_gettime(CLOCK_MONOTONIC, &now);
+		if (TIMEDIFF(now, xsel.tclick2) <= tripleclicktimeout) {
+			snap = SNAP_LINE;
+		} else if (TIMEDIFF(now, xsel.tclick1) <= doubleclicktimeout) {
+			snap = SNAP_WORD;
 		} else {
-			sel.snap = 0;
+			snap = 0;
 		}
-		selnormalize();
+		xsel.tclick2 = xsel.tclick1;
+		xsel.tclick1 = now;
 
-		if (sel.snap != 0)
-			sel.mode = SEL_READY;
-		tsetdirt(sel.nb.y, sel.ne.y);
-		sel.tclick2 = sel.tclick1;
-		sel.tclick1 = now;
+		selstart(x2col(e->xbutton.x), y2row(e->xbutton.y), snap);
 	}
-}
-
-void
-selcopy(Time t)
-{
-	xsetsel(getsel(), t);
 }
 
 void
@@ -465,10 +520,10 @@ selnotify(XEvent *e)
 		}
 
 		if (IS_SET(MODE_BRCKTPASTE) && ofs == 0)
-			ttywrite("\033[200~", 6);
-		ttysend((char *)data, nitems * format / 8);
+			ttywrite("\033[200~", 6, 0);
+		ttywrite((char *)data, nitems * format / 8, 1);
 		if (IS_SET(MODE_BRCKTPASTE) && rem == 0)
-			ttywrite("\033[201~", 6);
+			ttywrite("\033[201~", 6, 0);
 		XFree(data);
 		/* number of 32-bit chunks returned */
 		ofs += nitems * format / 32;
@@ -482,35 +537,9 @@ selnotify(XEvent *e)
 }
 
 void
-xselpaste(void)
-{
-	XConvertSelection(xw.dpy, XA_PRIMARY, xsel.xtarget, XA_PRIMARY,
-			xw.win, CurrentTime);
-}
-
-void
 xclipcopy(void)
 {
-	Atom clipboard;
-
-	if (sel.clipboard != NULL)
-		free(sel.clipboard);
-
-	if (sel.primary != NULL) {
-		sel.clipboard = xstrdup(sel.primary);
-		clipboard = XInternAtom(xw.dpy, "CLIPBOARD", 0);
-		XSetSelectionOwner(xw.dpy, clipboard, xw.win, CurrentTime);
-	}
-}
-
-void
-xclippaste(void)
-{
-	Atom clipboard;
-
-	clipboard = XInternAtom(xw.dpy, "CLIPBOARD", 0);
-	XConvertSelection(xw.dpy, clipboard, xsel.xtarget, clipboard,
-			xw.win, CurrentTime);
+	clipcopy(NULL);
 }
 
 void
@@ -554,9 +583,9 @@ selrequest(XEvent *e)
 		 */
 		clipboard = XInternAtom(xw.dpy, "CLIPBOARD", 0);
 		if (xsre->selection == XA_PRIMARY) {
-			seltext = sel.primary;
+			seltext = xsel.primary;
 		} else if (xsre->selection == clipboard) {
-			seltext = sel.clipboard;
+			seltext = xsel.clipboard;
 		} else {
 			fprintf(stderr,
 				"Unhandled clipboard selection 0x%lx\n",
@@ -578,14 +607,20 @@ selrequest(XEvent *e)
 }
 
 void
-xsetsel(char *str, Time t)
+setsel(char *str, Time t)
 {
-	free(sel.primary);
-	sel.primary = str;
+	free(xsel.primary);
+	xsel.primary = str;
 
 	XSetSelectionOwner(xw.dpy, XA_PRIMARY, xw.win, t);
 	if (XGetSelectionOwner(xw.dpy, XA_PRIMARY) != xw.win)
 		selclear_(NULL);
+}
+
+void
+xsetsel(char *str)
+{
+	setsel(str, CurrentTime);
 }
 
 void
@@ -596,41 +631,21 @@ brelease(XEvent *e)
 		return;
 	}
 
-	if (e->xbutton.button == Button2) {
-		xselpaste();
-	} else if (e->xbutton.button == Button1) {
-		if (sel.mode == SEL_READY) {
-			getbuttoninfo(e);
-			selcopy(e->xbutton.time);
-		} else
-			selclear_(NULL);
-		sel.mode = SEL_IDLE;
-		tsetdirt(sel.nb.y, sel.ne.y);
-	}
+	if (e->xbutton.button == Button2)
+		selpaste(NULL);
+	else if (e->xbutton.button == Button1)
+		mousesel(e, 1);
 }
 
 void
 bmotion(XEvent *e)
 {
-	int oldey, oldex, oldsby, oldsey;
-
 	if (IS_SET(MODE_MOUSE) && !(e->xbutton.state & forceselmod)) {
 		mousereport(e);
 		return;
 	}
 
-	if (!sel.mode)
-		return;
-
-	sel.mode = SEL_READY;
-	oldey = sel.oe.y;
-	oldex = sel.oe.x;
-	oldsby = sel.nb.y;
-	oldsey = sel.ne.y;
-	getbuttoninfo(e);
-
-	if (oldey != sel.oe.y || oldex != sel.oe.x)
-		tsetdirt(MIN(sel.nb.y, oldsby), MAX(sel.ne.y, oldsey));
+	mousesel(e, 0);
 }
 
 void
@@ -648,6 +663,7 @@ cresize(int width, int height)
 
 	tresize(col, row);
 	xresize(col, row);
+	ttyresize(win.tw, win.th);
 }
 
 void
@@ -703,7 +719,7 @@ xloadcols(void)
 	static int loaded;
 	Color *cp;
 
-	dc.collen = MAX(colornamelen, 256);
+	dc.collen = MAX(LEN(colorname), 256);
 	dc.col = xmalloc(dc.collen * sizeof(Color));
 
 	if (loaded) {
@@ -1080,6 +1096,10 @@ xinit(void)
 	xhints();
 	XSync(xw.dpy, False);
 
+	clock_gettime(CLOCK_MONOTONIC, &xsel.tclick1);
+	clock_gettime(CLOCK_MONOTONIC, &xsel.tclick2);
+	xsel.primary = NULL;
+	xsel.clipboard = NULL;
 	xsel.xtarget = XInternAtom(xw.dpy, "UTF8_STRING", 0);
 	if (xsel.xtarget == None)
 		xsel.xtarget = XA_STRING;
@@ -1371,7 +1391,6 @@ xdrawcursor(void)
 	static int oldx = 0, oldy = 0;
 	int curx;
 	Glyph g = {' ', ATTR_NULL, defaultbg, defaultcs}, og;
-	int ena_sel = sel.ob.x != -1 && sel.alt == IS_SET(MODE_ALTSCREEN);
 	Color drawcol;
 
 	LIMIT(oldx, 0, term.col-1);
@@ -1387,7 +1406,7 @@ xdrawcursor(void)
 
 	/* remove the old cursor */
 	og = term.line[oldy][oldx];
-	if (ena_sel && selected(oldx, oldy))
+	if (selected(oldx, oldy))
 		og.mode ^= ATTR_REVERSE;
 	xdrawglyph(og, oldx, oldy);
 
@@ -1401,7 +1420,7 @@ xdrawcursor(void)
 	if (IS_SET(MODE_REVERSE)) {
 		g.mode |= ATTR_REVERSE;
 		g.bg = defaultfg;
-		if (ena_sel && selected(term.c.x, term.c.y)) {
+		if (selected(term.c.x, term.c.y)) {
 			drawcol = dc.col[defaultcs];
 			g.fg = defaultrcs;
 		} else {
@@ -1409,7 +1428,7 @@ xdrawcursor(void)
 			g.fg = defaultcs;
 		}
 	} else {
-		if (ena_sel && selected(term.c.x, term.c.y)) {
+		if (selected(term.c.x, term.c.y)) {
 			drawcol = dc.col[defaultrcs];
 			g.fg = defaultfg;
 			g.bg = defaultrcs;
@@ -1508,7 +1527,6 @@ drawregion(int x1, int y1, int x2, int y2)
 	int i, x, y, ox, numspecs;
 	Glyph base, new;
 	XftGlyphFontSpec *specs;
-	int ena_sel = sel.ob.x != -1 && sel.alt == IS_SET(MODE_ALTSCREEN);
 
 	if (!(win.state & WIN_VISIBLE))
 		return;
@@ -1527,7 +1545,7 @@ drawregion(int x1, int y1, int x2, int y2)
 			new = term.line[y][x];
 			if (new.mode == ATTR_WDUMMY)
 				continue;
-			if (ena_sel && selected(x, y))
+			if (selected(x, y))
 				new.mode ^= ATTR_REVERSE;
 			if (i > 0 && ATTRCMP(base, new)) {
 				xdrawglyphfontspecs(specs, base, i, ox, y);
@@ -1574,6 +1592,16 @@ xsetpointermotion(int set)
 	XChangeWindowAttributes(xw.dpy, xw.win, CWEventMask, &xw.attrs);
 }
 
+int
+xsetcursor(int cursor)
+{
+	DEFAULT(cursor, 1);
+	if (!BETWEEN(cursor, 0, 6))
+		return 1;
+	win.cursor = cursor;
+	return 0;
+}
+
 void
 xseturgency(int add)
 {
@@ -1606,12 +1634,12 @@ focus(XEvent *ev)
 		win.state |= WIN_FOCUSED;
 		xseturgency(0);
 		if (IS_SET(MODE_FOCUS))
-			ttywrite("\033[I", 3);
+			ttywrite("\033[I", 3, 0);
 	} else {
 		XUnsetICFocus(xw.xic);
 		win.state &= ~WIN_FOCUSED;
 		if (IS_SET(MODE_FOCUS))
-			ttywrite("\033[O", 3);
+			ttywrite("\033[O", 3, 0);
 	}
 }
 
@@ -1628,16 +1656,16 @@ kmap(KeySym k, uint state)
 	int i;
 
 	/* Check for mapped keys out of X11 function keys. */
-	for (i = 0; i < mappedkeyslen; i++) {
+	for (i = 0; i < LEN(mappedkeys); i++) {
 		if (mappedkeys[i] == k)
 			break;
 	}
-	if (i == mappedkeyslen) {
+	if (i == LEN(mappedkeys)) {
 		if ((k & 0xFFFF) < 0xFD00)
 			return NULL;
 	}
 
-	for (kp = key; kp < key + keyslen; kp++) {
+	for (kp = key; kp < key + LEN(key); kp++) {
 		if (kp->k != k)
 			continue;
 
@@ -1677,7 +1705,7 @@ kpress(XEvent *ev)
 
 	len = XmbLookupString(xw.xic, e, buf, sizeof buf, &ksym, &status);
 	/* 1. shortcuts */
-	for (bp = shortcuts; bp < shortcuts + shortcutslen; bp++) {
+	for (bp = shortcuts; bp < shortcuts + LEN(shortcuts); bp++) {
 		if (ksym == bp->keysym && match(bp->mod, e->state)) {
 			bp->func(&(bp->arg));
 			return;
@@ -1686,7 +1714,7 @@ kpress(XEvent *ev)
 
 	/* 2. custom keys from config.h */
 	if ((customkey = kmap(ksym, e->state))) {
-		ttysend(customkey, strlen(customkey));
+		ttywrite(customkey, strlen(customkey), 1);
 		return;
 	}
 
@@ -1705,7 +1733,7 @@ kpress(XEvent *ev)
 			len = 2;
 		}
 	}
-	ttysend(buf, len);
+	ttywrite(buf, len, 1);
 }
 
 
@@ -1737,7 +1765,6 @@ resize(XEvent *e)
 		return;
 
 	cresize(e->xconfigure.width, e->xconfigure.height);
-	ttyresize(win.tw, win.th);
 }
 
 void
@@ -1766,9 +1793,8 @@ run(void)
 		}
 	} while (ev.type != MapNotify);
 
-	cresize(w, h);
 	ttynew(opt_line, opt_io, opt_cmd);
-	ttyresize(win.tw, win.th);
+	cresize(w, h);
 
 	clock_gettime(CLOCK_MONOTONIC, &last);
 	lastblink = last;
