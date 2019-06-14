@@ -309,6 +309,18 @@ static char *opt_name  = NULL;
 static char *opt_title = NULL;
 
 void
+xbell(void)
+{
+    // Do nothing, no bell in wayland.
+}
+
+void
+xsetpointermotion(int dummy)
+{
+    // Do nothing, not required under wayland.
+}
+
+void
 xsetmode(int set, unsigned int flags)
 {
     int mode = win.mode;

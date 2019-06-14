@@ -60,9 +60,8 @@ static unsigned int cursorthickness = 2;
  * bell volume. It must be a value between -100 and 100. Use 0 for disabling
  * it
  */
-/* XXX: Wayland does not have a bell.
- * static int bellvolume = 0;
- */
+static int bellvolume = 0;
+
 
 /* default TERM value */
 char *termname = "st-wl-256color";

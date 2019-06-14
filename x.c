@@ -38,10 +38,9 @@ typedef struct {
 	KeySym k;
 	uint mask;
 	char *s;
-	/* three valued logic variables: 0 indifferent, 1 on, -1 off */
+	/* three-valued logic variables: 0 indifferent, 1 on, -1 off */
 	signed char appkey;    /* application keypad */
 	signed char appcursor; /* application cursor */
-	signed char crlf;      /* crlf mode          */
 } Key;
 
 /* X modifiers */
@@ -52,6 +51,7 @@ typedef struct {
 /* function definitions used in config.h */
 static void clipcopy(const Arg *);
 static void clippaste(const Arg *);
+static void numlock(const Arg *);
 static void selpaste(const Arg *);
 static void zoom(const Arg *);
 static void zoomabs(const Arg *);
@@ -65,6 +65,7 @@ static void zoomreset(const Arg *);
 #define XEMBED_FOCUS_OUT 5
 
 /* macros */
+#define IS_SET(flag)		((win.mode & (flag)) != 0)
 #define TRUERED(x)		(((x) & 0xff0000) >> 8)
 #define TRUEGREEN(x)		(((x) & 0xff00))
 #define TRUEBLUE(x)		(((x) & 0xff) << 8)
@@ -128,7 +129,6 @@ static int xmakeglyphfontspecs(XftGlyphFontSpec *, const Glyph *, int, int, int)
 static void xdrawglyphfontspecs(const XftGlyphFontSpec *, Glyph, int, int, int);
 static void xdrawglyph(Glyph, int, int);
 static void xclear(int, int, int, int);
-static void xdrawcursor(void);
 static int xgeommasktogravity(int);
 static void xinit(void);
 static void cresize(int, int);
@@ -197,11 +197,6 @@ static XWindow xw;
 static XSelection xsel;
 static TermWindow win;
 
-enum window_state {
-	WIN_VISIBLE = 1,
-	WIN_FOCUSED = 2
-};
-
 /* Font Ring Cache */
 enum {
 	FRC_NORMAL,
@@ -262,6 +257,12 @@ selpaste(const Arg *dummy)
 {
 	XConvertSelection(xw.dpy, XA_PRIMARY, xsel.xtarget, XA_PRIMARY,
 			xw.win, CurrentTime);
+}
+
+void
+numlock(const Arg *dummy)
+{
+	win.mode ^= MODE_NUMLOCK;
 }
 
 void
@@ -1091,6 +1092,7 @@ xinit(void)
 	XChangeProperty(xw.dpy, xw.win, xw.netwmpid, XA_CARDINAL, 32,
 			PropModeReplace, (uchar *)&thispid, 1);
 
+	win.mode = MODE_NUMLOCK;
 	resettitle();
 	XMapWindow(xw.dpy, xw.win);
 	xhints();
@@ -1320,14 +1322,13 @@ xdrawglyphfontspecs(const XftGlyphFontSpec *specs, Glyph base, int len, int x, i
 		fg = &revfg;
 	}
 
-
 	if (base.mode & ATTR_REVERSE) {
 		temp = fg;
 		fg = bg;
 		bg = temp;
 	}
 
-	if (base.mode & ATTR_BLINK && term.mode & MODE_BLINK)
+	if (base.mode & ATTR_BLINK && win.mode & MODE_BLINK)
 		fg = bg;
 
 	if (base.mode & ATTR_INVISIBLE)
@@ -1441,7 +1442,7 @@ xdrawcursor(void)
 		return;
 
 	/* draw the new one */
-	if (win.state & WIN_FOCUSED) {
+	if (IS_SET(MODE_FOCUSED)) {
 		switch (win.cursor) {
 		case 7: /* st extension: snowman */
 			utf8decode("☃", &g.u, UTF_SIZ);
@@ -1510,59 +1511,51 @@ xsettitle(char *p)
 	XFree(prop.value);
 }
 
-void
-draw(void)
+int
+xstartdraw(void)
 {
-	drawregion(0, 0, term.col, term.row);
+	return IS_SET(MODE_VISIBLE);
+}
+
+void
+xdrawline(Line line, int x1, int y1, int x2)
+{
+	int i, x, ox, numspecs;
+	Glyph base, new;
+	XftGlyphFontSpec *specs = xw.specbuf;
+
+	numspecs = xmakeglyphfontspecs(specs, &line[x1], x2 - x1, x1, y1);
+	i = ox = 0;
+	for (x = x1; x < x2 && i < numspecs; x++) {
+		new = line[x];
+		if (new.mode == ATTR_WDUMMY)
+			continue;
+		if (selected(x, y1))
+			new.mode ^= ATTR_REVERSE;
+		if (i > 0 && ATTRCMP(base, new)) {
+			xdrawglyphfontspecs(specs, base, i, ox, y1);
+			specs += i;
+			numspecs -= i;
+			i = 0;
+		}
+		if (i == 0) {
+			ox = x;
+			base = new;
+		}
+		i++;
+	}
+	if (i > 0)
+		xdrawglyphfontspecs(specs, base, i, ox, y1);
+}
+
+void
+xfinishdraw(void)
+{
 	XCopyArea(xw.dpy, xw.buf, xw.win, dc.gc, 0, 0, win.w,
 			win.h, 0, 0);
 	XSetForeground(xw.dpy, dc.gc,
 			dc.col[IS_SET(MODE_REVERSE)?
 				defaultfg : defaultbg].pixel);
-}
-
-void
-drawregion(int x1, int y1, int x2, int y2)
-{
-	int i, x, y, ox, numspecs;
-	Glyph base, new;
-	XftGlyphFontSpec *specs;
-
-	if (!(win.state & WIN_VISIBLE))
-		return;
-
-	for (y = y1; y < y2; y++) {
-		if (!term.dirty[y])
-			continue;
-
-		term.dirty[y] = 0;
-
-		specs = xw.specbuf;
-		numspecs = xmakeglyphfontspecs(specs, &term.line[y][x1], x2 - x1, x1, y);
-
-		i = ox = 0;
-		for (x = x1; x < x2 && i < numspecs; x++) {
-			new = term.line[y][x];
-			if (new.mode == ATTR_WDUMMY)
-				continue;
-			if (selected(x, y))
-				new.mode ^= ATTR_REVERSE;
-			if (i > 0 && ATTRCMP(base, new)) {
-				xdrawglyphfontspecs(specs, base, i, ox, y);
-				specs += i;
-				numspecs -= i;
-				i = 0;
-			}
-			if (i == 0) {
-				ox = x;
-				base = new;
-			}
-			i++;
-		}
-		if (i > 0)
-			xdrawglyphfontspecs(specs, base, i, ox, y);
-	}
-	xdrawcursor();
 }
 
 void
@@ -1576,13 +1569,13 @@ visibility(XEvent *ev)
 {
 	XVisibilityEvent *e = &ev->xvisibility;
 
-	MODBIT(win.state, e->state != VisibilityFullyObscured, WIN_VISIBLE);
+	MODBIT(win.mode, e->state != VisibilityFullyObscured, MODE_VISIBLE);
 }
 
 void
 unmap(XEvent *ev)
 {
-	win.state &= ~WIN_VISIBLE;
+	win.mode &= ~MODE_VISIBLE;
 }
 
 void
@@ -1590,6 +1583,15 @@ xsetpointermotion(int set)
 {
 	MODBIT(xw.attrs.event_mask, set, PointerMotionMask);
 	XChangeWindowAttributes(xw.dpy, xw.win, CWEventMask, &xw.attrs);
+}
+
+void
+xsetmode(int set, unsigned int flags)
+{
+	int mode = win.mode;
+	MODBIT(win.mode, set, flags);
+	if ((win.mode & MODE_REVERSE) != (mode & MODE_REVERSE))
+		redraw();
 }
 
 int
@@ -1615,7 +1617,7 @@ xseturgency(int add)
 void
 xbell(void)
 {
-	if (!(win.state & WIN_FOCUSED))
+	if (!(IS_SET(MODE_FOCUSED)))
 		xseturgency(1);
 	if (bellvolume)
 		XkbBell(xw.dpy, xw.win, bellvolume, (Atom)NULL);
@@ -1631,13 +1633,13 @@ focus(XEvent *ev)
 
 	if (ev->type == FocusIn) {
 		XSetICFocus(xw.xic);
-		win.state |= WIN_FOCUSED;
+		win.mode |= MODE_FOCUSED;
 		xseturgency(0);
 		if (IS_SET(MODE_FOCUS))
 			ttywrite("\033[I", 3, 0);
 	} else {
 		XUnsetICFocus(xw.xic);
-		win.state &= ~WIN_FOCUSED;
+		win.mode &= ~MODE_FOCUSED;
 		if (IS_SET(MODE_FOCUS))
 			ttywrite("\033[O", 3, 0);
 	}
@@ -1674,13 +1676,10 @@ kmap(KeySym k, uint state)
 
 		if (IS_SET(MODE_APPKEYPAD) ? kp->appkey < 0 : kp->appkey > 0)
 			continue;
-		if (term.numlock && kp->appkey == 2)
+		if (IS_SET(MODE_NUMLOCK) && kp->appkey == 2)
 			continue;
 
 		if (IS_SET(MODE_APPCURSOR) ? kp->appcursor < 0 : kp->appcursor > 0)
-			continue;
-
-		if (IS_SET(MODE_CRLF) ? kp->crlf < 0 : kp->crlf > 0)
 			continue;
 
 		return kp->s;
@@ -1746,10 +1745,10 @@ cmessage(XEvent *e)
 	 */
 	if (e->xclient.message_type == xw.xembed && e->xclient.format == 32) {
 		if (e->xclient.data.l[1] == XEMBED_FOCUS_IN) {
-			win.state |= WIN_FOCUSED;
+			win.mode |= MODE_FOCUSED;
 			xseturgency(0);
 		} else if (e->xclient.data.l[1] == XEMBED_FOCUS_OUT) {
-			win.state &= ~WIN_FOCUSED;
+			win.mode &= ~MODE_FOCUSED;
 		}
 	} else if (e->xclient.data.l[0] == xw.wmdeletewin) {
 		/* Send SIGHUP to shell */
@@ -1814,7 +1813,7 @@ run(void)
 			if (blinktimeout) {
 				blinkset = tattrset(ATTR_BLINK);
 				if (!blinkset)
-					MODBIT(term.mode, 0, MODE_BLINK);
+					MODBIT(win.mode, 0, MODE_BLINK);
 			}
 		}
 
@@ -1829,7 +1828,7 @@ run(void)
 		dodraw = 0;
 		if (blinktimeout && TIMEDIFF(now, lastblink) > blinktimeout) {
 			tsetdirtattr(ATTR_BLINK);
-			term.mode ^= MODE_BLINK;
+			win.mode ^= MODE_BLINK;
 			lastblink = now;
 			dodraw = 1;
 		}
