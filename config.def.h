@@ -214,10 +214,10 @@ Shortcut shortcuts[] = {
  * If you want keys other than the X11 function keys (0xFD00 - 0xFFFF)
  * to be mapped below, add them to this array.
  */
-static xkb_keysym_t mappedkeys[] = { -1 };
+xkb_keysym_t mappedkeys[] = { -1 };
 
 /* State bits to ignore when matching key or button events. */
-static uint ignoremod = 0;
+uint ignoremod = 0;
 
 /*
  * Override mouse-select while mask is active (when MODE_MOUSE is set).
@@ -230,7 +230,7 @@ uint forceselmod = MOD_MASK_SHIFT;
  * This is the huge key array which defines all compatibility to the Linux
  * world. Please decide about changes wisely.
  */
-static Key key[] = {
+Key key[] = {
 	/* keysym                mask             string      appkey appcursor crlf */
 	{ XKB_KEY_KP_Home,       MOD_MASK_SHIFT,  "\033[2J",       0,   -1,    0},
 	{ XKB_KEY_KP_Home,       MOD_MASK_SHIFT,  "\033[1;2H",     0,   +1,    0},

@@ -32,9 +32,9 @@
 /* Wayland */
 #include <wayland-client.h>
 
-char *argv0;
-#include "win.h"
+
 #include "st.h"
+#include "win.h"
 
 #if   defined(__linux)
  #include <pty.h>
@@ -52,8 +52,7 @@ char *argv0;
 #define STR_ARG_SIZ   ESC_ARG_SIZ
 
 /* macros */
-#define NUMMAXLEN(x)        ((int)(sizeof(x) * 2.56 + 0.5) + 1)
-#define DEFAULT(a, b)		(a) = (a) ? (a) : (b)
+#define NUMMAXLEN(x)		((int)(sizeof(x) * 2.56 + 0.5) + 1)
 #define ISCONTROLC0(c)		(BETWEEN(c, 0, 0x1f) || (c) == '\177')
 #define ISCONTROLC1(c)		(BETWEEN(c, 0x80, 0x9f))
 #define ISCONTROL(c)		(ISCONTROLC0(c) || ISCONTROLC1(c))
@@ -115,24 +114,11 @@ typedef struct {
 	int narg;              /* nb of args */
 } STREscape;
 
-typedef struct {
-    xkb_keysym_t k;
-    uint mask;
-    char *s;
-    /* three valued logic variables: 0 indifferent, 1 on, -1 off */
-    signed char appkey;    /* application keypad */
-    signed char appcursor; /* application cursor */
-    signed char crlf;      /* crlf mode          */
-} Key;
-
 /* function definitions used in config.h */
 static void clipcopy(const Arg *);
 static void clippaste(const Arg *);
 static void numlock(const Arg *);
 static void selpaste(const Arg *);
-static void zoom(const Arg *);
-static void zoomabs(const Arg *);
-static void zoomreset(const Arg *);
 static void printsel(const Arg *);
 static void printscreen(const Arg *) ;
 static void iso14755(const Arg *);
@@ -142,8 +128,8 @@ static void sendbreak(const Arg *);
 /* config.h for applying patches and the configuration. */
 #include "config.h"
 
-static void execsh(void);
-static void stty(void);
+static void execsh(char **);
+static void stty(char **);
 static void sigchld(int);
 
 static void csidump(void);
@@ -173,7 +159,6 @@ static void tnewline(int);
 static void tputtab(int);
 static void tputc(Rune);
 static void treset(void);
-static void tresize(int, int);
 static void tscrollup(int, int);
 static void tscrolldown(int, int);
 static void tsetattr(int *, int);
@@ -181,8 +166,8 @@ static void tsetchar(Rune, Glyph *, int, int);
 static void tsetscroll(int, int);
 static void tswapscreen(void);
 static void tsetmode(int, int, int *, int);
+static int twrite(const char *, int, int);
 static void tfulldirt(void);
-static void techo(Rune);
 static void tcontrolcode(uchar );
 static void tdectest(char );
 static void tdefutf8(char);
@@ -198,8 +183,9 @@ static char utf8encodebyte(Rune, size_t);
 static char *utf8strchr(char *s, Rune u);
 static size_t utf8validate(Rune *, size_t);
 
+static char *base64dec(const char *);
+
 static ssize_t xwrite(int, const char *, size_t);
-static void *xrealloc(void *, size_t);
 
 /* Globals */
 TermWindow win;
@@ -207,23 +193,11 @@ Term term;
 Selection sel;
 int cmdfd;
 pid_t pid;
-char **opt_cmd  = NULL;
-char *opt_class = NULL;
-char *opt_embed = NULL;
-char *opt_font  = NULL;
-char *opt_io    = NULL;
-char *opt_line  = NULL;
-char *opt_name  = NULL;
-char *opt_title = NULL;
 int oldbutton   = 3; /* button event on startup: 3 = release */
 
 static CSIEscape csiescseq;
 static STREscape strescseq;
 static int iofd = 1;
-
-char *usedfont = NULL;
-double usedfontsize = 0;
-double defaultfontsize = 0;
 
 static uchar utfbyte[UTF_SIZ + 1] = {0x80,    0, 0xC0, 0xE0, 0xF0};
 static uchar utfmask[UTF_SIZ + 1] = {0xC0, 0x80, 0xE0, 0xF0, 0xF8};
@@ -235,6 +209,8 @@ size_t colornamelen = LEN(colorname);
 size_t mshortcutslen = LEN(mshortcuts);
 size_t shortcutslen = LEN(shortcuts);
 size_t selmaskslen = LEN(selmasks);
+size_t keyslen = LEN(key);
+size_t mappedkeyslen = LEN(mappedkeys);
 size_t ashortcutslen = LEN(ashortcuts);
 
 ssize_t
@@ -284,7 +260,7 @@ xstrdup(char *s)
 }
 
 size_t
-utf8decode(char *c, Rune *u, size_t clen)
+utf8decode(const char *c, Rune *u, size_t clen)
 {
 	size_t i, j, len, type;
 	Rune udecoded;
@@ -370,34 +346,65 @@ utf8validate(Rune *u, size_t i)
 	return i;
 }
 
+static const char base64_digits[] = {
+	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 62, 0, 0, 0,
+	63, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 0, 0, 0, -1, 0, 0, 0, 0, 1,
+	2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21,
+	22, 23, 24, 25, 0, 0, 0, 0, 0, 0, 26, 27, 28, 29, 30, 31, 32, 33, 34,
+	35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 0,
+	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+};
+
+char
+base64dec_getc(const char **src)
+{
+	while (**src && !isprint(**src)) (*src)++;
+	return *((*src)++);
+}
+
+char *
+base64dec(const char *src)
+{
+	size_t in_len = strlen(src);
+	char *result, *dst;
+
+	if (in_len % 4)
+		in_len += 4 - (in_len % 4);
+	result = dst = xmalloc(in_len / 4 * 3 + 1);
+	while (*src) {
+		int a = base64_digits[(unsigned char) base64dec_getc(&src)];
+		int b = base64_digits[(unsigned char) base64dec_getc(&src)];
+		int c = base64_digits[(unsigned char) base64dec_getc(&src)];
+		int d = base64_digits[(unsigned char) base64dec_getc(&src)];
+
+		*dst++ = (a << 2) | ((b & 0x30) >> 4);
+		if (c == -1)
+			break;
+		*dst++ = ((b & 0x0f) << 4) | ((c & 0x3c) >> 2);
+		if (d == -1)
+			break;
+		*dst++ = ((c & 0x03) << 6) | d;
+	}
+	*dst = '\0';
+	return result;
+}
+
 void
 selinit(void)
 {
-	sel.tclick1 = 0;
-	sel.tclick2 = 0;
+    sel.tclick1 = 0;
+    sel.tclick2 = 0;
 	sel.mode = SEL_IDLE;
 	sel.snap = 0;
 	sel.ob.x = -1;
 	sel.primary = NULL;
 	sel.source = NULL;
-}
-
-int
-x2col(int x)
-{
-    x -= borderpx;
-    x /= win.cw;
-
-    return LIMIT(x, 0, term.col-1);
-}
-
-int
-y2row(int y)
-{
-    y -= borderpx;
-    y /= win.ch;
-
-    return LIMIT(y, 0, term.row-1);
 }
 
 int
@@ -624,9 +631,9 @@ die(const char *errstr, ...)
 }
 
 void
-execsh(void)
+execsh(char **args)
 {
-	char **args, *sh, *prog;
+	char *sh, *prog;
 	const struct passwd *pw;
 
 	errno = 0;
@@ -640,13 +647,13 @@ execsh(void)
 	if ((sh = getenv("SHELL")) == NULL)
 		sh = (pw->pw_shell[0]) ? pw->pw_shell : shell;
 
-	if (opt_cmd)
-		prog = opt_cmd[0];
+	if (args)
+		prog = args[0];
 	else if (utmp)
 		prog = utmp;
 	else
 		prog = sh;
-	args = (opt_cmd) ? opt_cmd : (char *[]) {prog, NULL};
+	DEFAULT(args, ((char *[]) {prog, NULL}));
 
 	unsetenv("COLUMNS");
 	unsetenv("LINES");
@@ -656,7 +663,6 @@ execsh(void)
 	setenv("SHELL", sh, 1);
 	setenv("HOME", pw->pw_dir, 1);
 	setenv("TERM", termname, 1);
-    // xsetenv(); // Removed in wayland version
 
 	signal(SIGCHLD, SIG_DFL);
 	signal(SIGHUP, SIG_DFL);
@@ -688,7 +694,7 @@ sigchld(int a)
 
 
 void
-stty(void)
+stty(char **args)
 {
 	char cmd[_POSIX_ARG_MAX], **p, *q, *s;
 	size_t n, siz;
@@ -698,7 +704,7 @@ stty(void)
 	memcpy(cmd, stty_args, n);
 	q = cmd + n;
 	siz = sizeof(cmd) - n;
-	for (p = opt_cmd; p && (s = *p); ++p) {
+	for (p = args; p && (s = *p); ++p) {
 		if ((n = strlen(s)) > siz-1)
 			die("stty parameter length too long\n");
 		*q++ = ' ';
@@ -712,26 +718,26 @@ stty(void)
 }
 
 void
-ttynew(void)
+ttynew(char *line, char *out, char **args)
 {
 	int m, s;
 	struct winsize w = {term.row, term.col, 0, 0};
 
-	if (opt_io) {
+	if (out) {
 		term.mode |= MODE_PRINT;
-		iofd = (!strcmp(opt_io, "-")) ?
-			  1 : open(opt_io, O_WRONLY | O_CREAT, 0666);
+		iofd = (!strcmp(out, "-")) ?
+			  1 : open(out, O_WRONLY | O_CREAT, 0666);
 		if (iofd < 0) {
 			fprintf(stderr, "Error opening %s:%s\n",
-				opt_io, strerror(errno));
+				out, strerror(errno));
 		}
 	}
 
-	if (opt_line) {
-		if ((cmdfd = open(opt_line, O_RDWR)) < 0)
+	if (line) {
+		if ((cmdfd = open(line, O_RDWR)) < 0)
 			die("open line failed: %s\n", strerror(errno));
 		dup2(cmdfd, 0);
-		stty();
+		stty(args);
 		return;
 	}
 
@@ -753,7 +759,7 @@ ttynew(void)
 			die("ioctl TIOCSCTTY failed: %s\n", strerror(errno));
 		close(s);
 		close(m);
-		execsh();
+		execsh(args);
 		break;
 	default:
 		close(s);
@@ -768,38 +774,19 @@ ttyread(void)
 {
 	static char buf[BUFSIZ];
 	static int buflen = 0;
-	char *ptr;
-	int charsize; /* size of utf8 char in bytes */
-	Rune unicodep;
+	int written;
 	int ret;
 
 	/* append read bytes to unprocessed bytes */
 	if ((ret = read(cmdfd, buf+buflen, LEN(buf)-buflen)) < 0)
 		die("Couldn't read from shell: %s\n", strerror(errno));
-
 	buflen += ret;
-	ptr = buf;
 
-	for (;;) {
-		if (IS_SET(MODE_UTF8) && !IS_SET(MODE_SIXEL)) {
-			/* process a complete utf8 char */
-			charsize = utf8decode(ptr, &unicodep, buflen);
-			if (charsize == 0)
-				break;
-			tputc(unicodep);
-			ptr += charsize;
-			buflen -= charsize;
-
-		} else {
-			if (buflen <= 0)
-				break;
-			tputc(*ptr++ & 0xFF);
-			buflen--;
-		}
-	}
+	written = twrite(buf, buflen, 0);
+	buflen -= written;
 	/* keep any uncomplete utf8 char for the next call */
 	if (buflen > 0)
-		memmove(buf, ptr, buflen);
+		memmove(buf, buf + written, buflen);
 
     wlneeddraw();
 	return ret;
@@ -865,38 +852,20 @@ write_error:
 void
 ttysend(char *s, size_t n)
 {
-	int len;
-	char *t, *lim;
-	Rune u;
-
 	ttywrite(s, n);
-	if (!IS_SET(MODE_ECHO))
-		return;
-
-	lim = &s[n];
-	for (t = s; t < lim; t += len) {
-		if (IS_SET(MODE_UTF8) && !IS_SET(MODE_SIXEL)) {
-			len = utf8decode(t, &u, n);
-		} else {
-			u = *t & 0xFF;
-			len = 1;
-		}
-		if (len <= 0)
-			break;
-		techo(u);
-		n -= len;
-	}
+	if (IS_SET(MODE_ECHO))
+		twrite(s, n, 1);
 }
 
 void
-ttyresize(void)
+ttyresize(int tw, int th)
 {
 	struct winsize w;
 
 	w.ws_row = term.row;
 	w.ws_col = term.col;
-	w.ws_xpixel = win.tw;
-	w.ws_ypixel = win.th;
+	w.ws_xpixel = tw;
+	w.ws_ypixel = th;
 	if (ioctl(cmdfd, TIOCSWINSZ, &w) < 0)
 		fprintf(stderr, "Couldn't set window size: %s\n", strerror(errno));
 }
@@ -1824,6 +1793,19 @@ strhandle(void)
 			if (narg > 1)
 				wlsettitle(strescseq.args[1]);
 			return;
+		case 52:
+			if (narg > 2) {
+				char *dec;
+
+				dec = base64dec(strescseq.args[2]);
+				if (dec) {
+					setsel(dec);
+					clipcopy(NULL);
+				} else {
+					fprintf(stderr, "erresc: invalid base64\n");
+				}
+			}
+			return;
 		case 4: /* color set */
 			if (narg < 3)
 				break;
@@ -1923,8 +1905,7 @@ void
 tprinter(char *s, size_t len)
 {
 	if (iofd != -1 && xwrite(iofd, s, len) < 0) {
-		fprintf(stderr, "Error writing in %s:%s\n",
-			opt_io, strerror(errno));
+		perror("Error writing to output file");
 		close(iofd);
 		iofd = -1;
 	}
@@ -2023,23 +2004,6 @@ tputtab(int n)
 }
 
 void
-techo(Rune u)
-{
-	if (ISCONTROL(u)) { /* control code */
-		if (u & 0x80) {
-			u &= 0x7f;
-			tputc('^');
-			tputc('[');
-		} else if (u != '\n' && u != '\r' && u != '\t') {
-			u ^= 0x40;
-			tputc('^');
-		}
-	}
-	tputc(u);
-    wlneeddraw();
-}
-
-void
 tdefutf8(char ascii)
 {
 	if (ascii == 'G')
@@ -2123,8 +2087,6 @@ tcontrolcode(uchar ascii)
 			/* backwards compatibility to xterm */
 			strhandle();
 		} else {
-			if (!(win.state & WIN_FOCUSED))
-				wlseturgency(1);
 			// if (bellvolume) // XXX: No bell on wayland
             //     XkbBell(xw.dpy, xw.win, bellvolume, (Atom)NULL);
 		}
@@ -2432,6 +2394,38 @@ check_control_code:
 	}
 }
 
+int
+twrite(const char *buf, int buflen, int show_ctrl)
+{
+	int charsize;
+	Rune u;
+	int n;
+
+	for (n = 0; n < buflen; n += charsize) {
+		if (IS_SET(MODE_UTF8) && !IS_SET(MODE_SIXEL)) {
+			/* process a complete utf8 char */
+			charsize = utf8decode(buf + n, &u, buflen - n);
+			if (charsize == 0)
+				break;
+		} else {
+			u = buf[n] & 0xFF;
+			charsize = 1;
+		}
+		if (show_ctrl && ISCONTROL(u)) {
+			if (u & 0x80) {
+				u &= 0x7f;
+				tputc('^');
+				tputc('[');
+			} else if (u != '\n' && u != '\r' && u != '\t') {
+				u ^= 0x40;
+				tputc('^');
+			}
+		}
+		tputc(u);
+	}
+	return n;
+}
+
 void
 tresize(int col, int row)
 {
@@ -2466,9 +2460,6 @@ tresize(int col, int row)
 		free(term.alt[i]);
 	}
 
-    /* resize to new width */  // Removed in wayland version
-    // term.specbuf = xrealloc(term.specbuf, col * sizeof(GlyphFontSpec));
-
 	/* resize to new height */
 	term.line = xrealloc(term.line, row * sizeof(Line));
 	term.alt  = xrealloc(term.alt,  row * sizeof(Line));
@@ -2482,7 +2473,7 @@ tresize(int col, int row)
 	}
 
 	/* allocate any new rows */
-	for (/* i == minrow */; i < row; i++) {
+	for (/* i = minrow */; i < row; i++) {
 		term.line[i] = xmalloc(col * sizeof(Glyph));
 		term.alt[i] = xmalloc(col * sizeof(Glyph));
 	}
@@ -2518,129 +2509,20 @@ tresize(int col, int row)
 }
 
 void
-zoom(const Arg *arg)
-{
-	Arg larg;
-
-	larg.f = usedfontsize + arg->f;
-	zoomabs(&larg);
-}
-
-void
-zoomabs(const Arg *arg)
-{
-	wlunloadfonts();
-	wlloadfonts(usedfont, arg->f);
-	cresize(0, 0);
-	ttyresize();
-	redraw();
-	/* XXX: Should the window size be updated here because wayland doesn't
-	 * have a notion of hints?
-	 * xhints(); */
-}
-
-void
-zoomreset(const Arg *arg)
-{
-	Arg larg;
-
-	if (defaultfontsize > 0) {
-		larg.f = defaultfontsize;
-		zoomabs(&larg);
-	}
-}
-
-void
 resettitle(void)
 {
-    wlsettitle(opt_title ? opt_title : "st-wl");
+    wlsettitle(NULL);
 }
 
 void
 redraw(void)
 {
 	tfulldirt();
-    // draw(); // Removed in wayland branch
-}
-
-int
-match(uint mask, uint state)
-{
-    return mask == MOD_MASK_ANY || mask == (state & ~(ignoremod));
+	// draw(); // removed in wayland branch
 }
 
 void
 numlock(const Arg *dummy)
 {
 	term.numlock ^= 1;
-}
-
-char*
-kmap(xkb_keysym_t k, uint state)
-{
-    Key *kp;
-    int i;
-
-    /* Check for mapped keys out of X11 function keys. */
-    for (i = 0; i < LEN(mappedkeys); i++) {
-        if (mappedkeys[i] == k)
-            break;
-    }
-    if (i == LEN(mappedkeys)) {
-        if ((k & 0xFFFF) < 0xFD00)
-            return NULL;
-    }
-
-    for (kp = key; kp < key + LEN(key); kp++) {
-        if (kp->k != k)
-            continue;
-
-        if (!match(kp->mask, state))
-            continue;
-
-        if (IS_SET(MODE_APPKEYPAD) ? kp->appkey < 0 : kp->appkey > 0)
-            continue;
-        if (term.numlock && kp->appkey == 2)
-            continue;
-
-        if (IS_SET(MODE_APPCURSOR) ? kp->appcursor < 0 : kp->appcursor > 0)
-            continue;
-
-        if (IS_SET(MODE_CRLF) ? kp->crlf < 0 : kp->crlf > 0)
-            continue;
-
-        return kp->s;
-    }
-
-    return NULL;
-}
-
-void
-cresize(int width, int height)
-{
-	int col, row;
-
-	if (width != 0)
-		win.w = width;
-	if (height != 0)
-		win.h = height;
-
-	col = (win.w - 2 * borderpx) / win.cw;
-	row = (win.h - 2 * borderpx) / win.ch;
-
-	tresize(col, row);
-	wlresize(col, row);
-}
-
-void
-usage(void)
-{
-	die("usage: %s [-aiv] [-c class] [-f font] [-g geometry]"
-	    " [-n name] [-o file]\n"
-	    "          [-T title] [-t title] [-w windowid]"
-	    " [[-e] command [args ...]]\n"
-	    "       %s [-aiv] [-c class] [-f font] [-g geometry]"
-	    " [-n name] [-o file]\n"
-	    "          [-T title] [-t title] [-w windowid] -l line"
-	    " [stty_args ...]\n", argv0, argv0);
 }

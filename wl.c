@@ -22,9 +22,10 @@
 #include <wchar.h>
 #include <stdbool.h>
 
+static char *argv0;
 #include "arg.h"
-#include "win.h"
 #include "st.h"
+#include "win.h"
 #include "xdg-shell-client-protocol.h"
 
 #define DRAW_BUF_SIZ  20*1024
@@ -57,6 +58,7 @@ typedef struct {
     int px, py; /* pointer x and y */
     int vis;
     struct wl_callback * framecb;
+	uint32_t globalserial; /* global event serial */
     bool needdraw;
 } Wayland;
 
@@ -101,6 +103,18 @@ typedef struct {
     bool started;
     struct timespec last;
 } Repeat;
+
+
+
+/* TODO: Categorize these */
+static int x2col(int);
+static int y2row(int);
+static int match(uint, uint);
+static char *kmap(xkb_keysym_t, uint);
+static void wlresize(int, int);
+static void cresize(int, int);
+static void wlloadfonts(char *, double);
+static void wlunloadfonts(void);
 
 static void getbuttoninfo(void);
 static void wlmousereport(int, bool, int, int);
@@ -172,6 +186,9 @@ static void datasrcsend(void *, struct wl_data_source *, const char *,
         int32_t);
 static void datasrccancelled(void *, struct wl_data_source *);
 
+static void run(void);
+static void usage(void);
+
 /* Globals */
 static DC dc;
 static Wayland wl;
@@ -198,6 +215,11 @@ static struct wl_data_source_listener datasrclistener = { datasrctarget,
     datasrcsend, datasrccancelled };
 static struct wl_data_offer_listener dataofferlistener = { dataofferoffer };
 
+enum window_state {
+    WIN_VISIBLE = 1,
+    WIN_FOCUSED = 2
+};
+
 /* Font Ring Cache */
 enum {
     FRC_NORMAL,
@@ -215,6 +237,137 @@ typedef struct {
 /* Fontcache is an array now. A new font will be appended to the array. */
 static Fontcache frc[16];
 static int frclen = 0;
+static char *usedfont = NULL;
+static double usedfontsize = 0;
+static double defaultfontsize = 0;
+
+static char *opt_class = NULL;
+static char **opt_cmd  = NULL;
+static char *opt_embed = NULL;
+static char *opt_font  = NULL;
+static char *opt_io    = NULL;
+static char *opt_line  = NULL;
+static char *opt_name  = NULL;
+static char *opt_title = NULL;
+
+int
+x2col(int x)
+{
+    x -= borderpx;
+    x /= win.cw;
+
+    return LIMIT(x, 0, term.col-1);
+}
+
+int
+y2row(int y)
+{
+    y -= borderpx;
+    y /= win.ch;
+
+    return LIMIT(y, 0, term.row-1);
+}
+
+int
+match(uint mask, uint state)
+{
+    return mask == MOD_MASK_ANY || mask == (state & ~ignoremod);
+}
+
+char*
+kmap(xkb_keysym_t k, uint state)
+{
+    Key *kp;
+    int i;
+
+    /* Check for mapped keys out of X11 function keys. */
+    for (i = 0; i < mappedkeyslen; i++) {
+        if (mappedkeys[i] == k)
+            break;
+    }
+    if (i == mappedkeyslen) {
+        if ((k & 0xFFFF) < 0xFD00)
+            return NULL;
+    }
+
+    for (kp = key; kp < key + keyslen; kp++) {
+        if (kp->k != k)
+            continue;
+
+        if (!match(kp->mask, state))
+            continue;
+
+        if (IS_SET(MODE_APPKEYPAD) ? kp->appkey < 0 : kp->appkey > 0)
+            continue;
+        if (term.numlock && kp->appkey == 2)
+            continue;
+
+        if (IS_SET(MODE_APPCURSOR) ? kp->appcursor < 0 : kp->appcursor > 0)
+            continue;
+
+        if (IS_SET(MODE_CRLF) ? kp->crlf < 0 : kp->crlf > 0)
+            continue;
+
+        return kp->s;
+    }
+
+    return NULL;
+}
+
+void
+cresize(int width, int height)
+{
+    int col, row;
+
+    if (width != 0)
+        win.w = width;
+    if (height != 0)
+        win.h = height;
+
+    col = (win.w - 2 * borderpx) / win.cw;
+    row = (win.h - 2 * borderpx) / win.ch;
+
+    tresize(col, row);
+    wlresize(col, row);
+}
+
+void
+zoom(const Arg *arg)
+{
+	Arg larg;
+
+    larg.f = usedfontsize + arg->f;
+    zoomabs(&larg);
+}
+
+void
+zoomabs(const Arg *arg)
+{
+    wlunloadfonts();
+    wlloadfonts(usedfont, arg->f);
+    cresize(0, 0);
+    ttyresize(win.tw, win.th);
+    redraw();
+	/* XXX: Should the window size be updated here because wayland doesn't
+	 *   * have a notion of hints?
+	 *       * xhints(); */
+}
+
+void
+zoomreset(const Arg *arg)
+{
+    Arg larg;
+    if (defaultfontsize > 0) {
+    	larg.f = defaultfontsize;
+        zoomabs(&larg);
+    }
+}
+
+void
+setsel(char * buf)
+{
+	wlsetsel(buf, wl.globalserial);
+}
 
 void
 getbuttoninfo(void)
@@ -383,6 +536,7 @@ ptrbutton(void * data, struct wl_pointer * pointer, uint32_t serial,
         if (button == BTN_MIDDLE) {
             wlselpaste();
         } else if (button == BTN_LEFT) {
+			wl.globalserial = serial;
             if (sel.mode == SEL_READY) {
                 getbuttoninfo();
                 selcopy(serial);
@@ -606,6 +760,7 @@ kbdkey(void *data, struct wl_keyboard *keyboard, uint32_t serial, uint32_t time,
         return;
     }
 
+	wl.globalserial = serial;
     ksym = xkb_state_key_get_one_sym(wl.xkb.state, key + 8);
     len = xkb_keysym_to_utf8(ksym, buf, sizeof buf);
     if (len > 0)
@@ -690,6 +845,7 @@ kbdrepeatinfo(void *data, struct wl_keyboard *keyboard, int32_t rate,
     keyrepeatdelay = delay;
     keyrepeatinterval = 1000 / rate;
 }
+
 void
 wlresize(int col, int row)
 {
@@ -708,13 +864,8 @@ wlresize(int col, int row)
 void
 wlsettitle(char *title)
 {
+	DEFAULT(title, "st-wl");
     xdg_toplevel_set_title(wl.xdgtoplevel, title);
-}
-
-void
-wlseturgency(int add)
-{
-    /* XXX: no urgency equivalent yet in wayland */
 }
 
 void
@@ -756,7 +907,7 @@ xdgtoplevelconfigure(void *data, struct xdg_toplevel *toplevel,
         return;
     cresize(w, h);
     if (wl.configured)
-        ttyresize();
+        ttyresize(win.tw, win.th);
     else
         wl.configured = true;
 }
@@ -1644,8 +1795,8 @@ run(void)
     wl_display_roundtrip(wl.dpy);
     if (!wl.configured)
         cresize(win.w, win.h);
-    ttynew();
-    ttyresize();
+    ttynew(opt_line, opt_io, opt_cmd);
+    ttyresize(win.tw, win.th);
     draw();
 
     clock_gettime(CLOCK_MONOTONIC, &last);
@@ -1720,6 +1871,19 @@ run(void)
         wl_display_dispatch_pending(wl.dpy);
         wl_display_flush(wl.dpy);
     }
+}
+
+void
+usage(void)
+{
+	die("usage: %s [-aiv] [-c class] [-f font] [-g geometry]"
+    " [-n name] [-o file]\n"
+    "          [-T title] [-t title] [-w windowid]"
+    " [[-e] command [args ...]]\n"
+    "       %s [-aiv] [-c class] [-f font] [-g geometry]"
+    " [-n name] [-o file]\n"
+    "          [-T title] [-t title] [-w windowid] -l line"
+    " [stty_args ...]\n", argv0, argv0);
 }
 
 int

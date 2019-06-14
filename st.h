@@ -9,6 +9,7 @@
 #define LEN(a)          (sizeof(a) / sizeof(a)[0])
 #define BETWEEN(x, a, b)    ((a) <= (x) && (x) <= (b))
 #define DIVCEIL(n, d)       (((n) + ((d) - 1)) / (d))
+#define DEFAULT(a, b)       (a) = (a) ? (a) : (b)
 #define LIMIT(x, a, b)      (x) = (x) < (a) ? (a) : (x) > (b) ? (b) : (x)
 #define ATTRCMP(a, b)       ((a).mode != (b).mode || (a).fg != (b).fg || \
                 (a).bg != (b).bg)
@@ -80,11 +81,6 @@ enum selection_snap {
     SNAP_LINE = 2
 };
 
-enum window_state {
-    WIN_VISIBLE = 1,
-    WIN_FOCUSED = 2
-};
-
 typedef unsigned char uchar;
 typedef unsigned int uint;
 typedef unsigned long ulong;
@@ -115,7 +111,6 @@ typedef struct {
     Line *line;   /* screen */
     Line *alt;    /* alternate screen */
     int *dirty;  /* dirtyness of lines */
-    //GlyphFontSpec *specbuf; /* font spec buffer used for rendering (deprecated on wayland)*/
     TCursor c;    /* cursor */
     int top;      /* top    scroll limit */
     int bot;      /* bottom scroll limit */
@@ -182,6 +177,16 @@ typedef struct {
 } Shortcut;
 
 typedef struct {
+    xkb_keysym_t k;
+    uint mask;
+    char *s;
+    /* three valued logic variables: 0 indifferent, 1 on, -1 off */
+    signed char appkey;    /* application keypad */
+    signed char appcursor; /* application cursor */
+    signed char crlf;      /* crlf mode          */
+} Key;
+
+typedef struct {
     int axis;
     int dir;
     uint mask;
@@ -193,35 +198,29 @@ void redraw(void);
 
 int tattrset(int);
 void tnew(int, int);
+void tresize(int, int);
 void tsetdirt(int, int);
 void tsetdirtattr(int);
-int match(uint, uint);
-void ttynew(void);
+void ttynew(char *, char *, char **);
 size_t ttyread(void);
-void ttyresize(void);
+void ttyresize(int, int);
 void ttysend(char *, size_t);
 void ttywrite(const char *, size_t);
 
 void resettitle(void);
 
-char *kmap(xkb_keysym_t, uint);
-void cresize(int, int);
 void selclear(void);
-
 void selinit(void);
 void selnormalize(void);
 int selected(int, int);
 char *getsel(void);
-int x2col(int);
-int y2row(int);
 
-size_t utf8decode(char *, Rune *, size_t);
+size_t utf8decode(const char *, Rune *, size_t);
 size_t utf8encode(Rune, char *);
 
 void *xmalloc(size_t);
+void *xrealloc(void *, size_t);
 char *xstrdup(char *);
-
-void usage(void);
 
 /* Globals */
 extern TermWindow win;
@@ -229,19 +228,7 @@ extern Term term;
 extern Selection sel;
 extern int cmdfd;
 extern pid_t pid;
-extern char **opt_cmd;
-extern char *opt_class;
-extern char *opt_embed;
-extern char *opt_font;
-extern char *opt_io;
-extern char *opt_line;
-extern char *opt_name;
-extern char *opt_title;
 extern int oldbutton;
-
-extern char *usedfont;
-extern double usedfontsize;
-extern double defaultfontsize;
 
 /* config.h globals */
 extern char font[];
@@ -254,6 +241,7 @@ extern int allowaltscreen;
 // extern unsigned int xfps;
 // extern unsigned int actionfps;
 extern unsigned int cursorthickness;
+// extern int bellvolume;
 extern unsigned int blinktimeout;
 extern char termname[];
 extern const char *colorname[];
@@ -273,7 +261,12 @@ extern MouseShortcut mshortcuts[];
 extern size_t mshortcutslen;
 extern Shortcut shortcuts[];
 extern size_t shortcutslen;
+extern xkb_keysym_t mappedkeys[];
+extern size_t mappedkeyslen;
+extern uint ignoremod;
 extern uint forceselmod;
+extern Key key[];
+extern size_t keyslen;
 extern uint selmasks[];
 extern size_t selmaskslen;
 extern char ascii_printable[];

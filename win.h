@@ -12,22 +12,19 @@
 
 void draw(void);
 void drawregion(int, int, int, int);
-void run(void);
 
 // void xbell(int);
 // void xclipcopy(void);
 // void xclippaste(void);
 // void xhints(void);
-void wlinit(void);
 void wlloadcols(void);
 int wlsetcolorname(int, const char*);
-void wlloadfonts(char *, double);
-// void xsetenv(void);
 void wlsettitle(char *);
 // void xsetpointermotion(int);
-void wlseturgency(int);
-void wlunloadfonts(void);
-void wlresize(int, int);
 void wlselpaste(void);
-// unsigned long xwinid(void);
+void setsel(char*);
+void zoom(const Arg *);
+void zoomabs(const Arg *);
+void zoomreset(const Arg *);
+
 void wlneeddraw(void);
