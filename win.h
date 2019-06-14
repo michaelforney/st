@@ -30,3 +30,4 @@ void wlunloadfonts(void);
 void wlresize(int, int);
 void wlselpaste(void);
 // unsigned long xwinid(void);
+void wlneeddraw(void);

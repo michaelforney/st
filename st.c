@@ -237,9 +237,6 @@ size_t shortcutslen = LEN(shortcuts);
 size_t selmaskslen = LEN(selmasks);
 size_t ashortcutslen = LEN(ashortcuts);
 
-/* Wayland stuff */
-bool needdraw = true;
-
 ssize_t
 xwrite(int fd, const char *s, size_t len)
 {
@@ -804,7 +801,7 @@ ttyread(void)
 	if (buflen > 0)
 		memmove(buf, ptr, buflen);
 
-	needdraw = true;
+    wlneeddraw();
 	return ret;
 }
 
@@ -930,7 +927,7 @@ tsetdirt(int top, int bot)
 	for (i = top; i <= bot; i++)
 		term.dirty[i] = 1;
 
-	needdraw = true;
+    wlneeddraw();
 }
 
 void
@@ -2039,7 +2036,7 @@ techo(Rune u)
 		}
 	}
 	tputc(u);
-	needdraw = true;
+    wlneeddraw();
 }
 
 void

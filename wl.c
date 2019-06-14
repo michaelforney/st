@@ -20,6 +20,7 @@
 #include <wld/wayland.h>
 #include <xkbcommon/xkbcommon.h>
 #include <wchar.h>
+#include <stdbool.h>
 
 #include "arg.h"
 #include "win.h"
@@ -56,6 +57,7 @@ typedef struct {
     int px, py; /* pointer x and y */
     int vis;
     struct wl_callback * framecb;
+    bool needdraw;
 } Wayland;
 
 typedef struct {
@@ -567,7 +569,7 @@ kbdenter(void *data, struct wl_keyboard *keyboard, uint32_t serial,
     if (IS_SET(MODE_FOCUS))
         ttywrite("\033[I", 3);
     /* need to redraw the cursor */
-    needdraw = true;
+    wlneeddraw();
 }
 
 void
@@ -580,7 +582,7 @@ kbdleave(void *data, struct wl_keyboard *keyboard, uint32_t serial,
     if (IS_SET(MODE_FOCUS))
         ttywrite("\033[O", 3);
     /* need to redraw the cursor */
-    needdraw = true;
+    wlneeddraw();
     /* disable key repeat */
     repeat.len = 0;
 }
@@ -735,7 +737,7 @@ framedone(void *data, struct wl_callback *callback, uint32_t msecs)
 {
     wl_callback_destroy(callback);
     wl.framecb = NULL;
-    if (needdraw && win.state & WIN_VISIBLE) {
+    if (wl.needdraw && win.state & WIN_VISIBLE) {
         draw();
     }
 }
@@ -1004,6 +1006,12 @@ wlunloadfonts(void)
 }
 
 void
+wlneeddraw(void)
+{
+    wl.needdraw = true;
+}
+
+void
 draw(void)
 {
     int y, y0;
@@ -1029,7 +1037,7 @@ draw(void)
         wld_buffer_unreference(wld.oldbuffer);
         wld.oldbuffer = 0;
     }
-    needdraw = false;
+    wl.needdraw = false;
 }
 
 void
@@ -1569,6 +1577,7 @@ wlinit(void)
     if (!(wl.dpy = wl_display_connect(NULL)))
         die("Can't open display\n");
 
+    wl.needdraw = true;
     registry = wl_display_get_registry(wl.dpy);
     wl_registry_add_listener(registry, &reglistener, NULL);
     wld.ctx = wld_wayland_create_context(wl.dpy, WLD_ANY);
@@ -1694,7 +1703,7 @@ run(void)
             }
         }
 
-        if (needdraw && win.state & WIN_VISIBLE) {
+        if (wl.needdraw && win.state & WIN_VISIBLE) {
             if (!wl.framecb) {
                 draw();
             }

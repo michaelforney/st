@@ -243,8 +243,6 @@ extern char *usedfont;
 extern double usedfontsize;
 extern double defaultfontsize;
 
-extern bool needdraw;
-
 /* config.h globals */
 extern char font[];
 extern int borderpx;
