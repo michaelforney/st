@@ -167,22 +167,22 @@ Axiskey ashortcuts[] = {
 
 /* Internal keyboard shortcuts. */
 #define MODKEY MOD_MASK_ALT
+#define TERMMOD (MOD_MASK_CTRL|MOD_MASK_SHIFT)
 
 Shortcut shortcuts[] = {
-	/* modifier              key                function        argument */
-	{ MOD_MASK_ANY,          XKB_KEY_Break,     sendbreak,      {.i =  0} },
-	{ MOD_MASK_CTRL,         XKB_KEY_Print,     toggleprinter,  {.i =  0} },
-	{ MOD_MASK_SHIFT,        XKB_KEY_Print,     printscreen,    {.i =  0} },
-	{ MOD_MASK_ANY,          XKB_KEY_Print,     printsel,       {.i =  0} },
-	{ MODKEY|MOD_MASK_SHIFT, XKB_KEY_Prior,     zoom,           {.f = +1} },
-	{ MODKEY|MOD_MASK_SHIFT, XKB_KEY_Next,      zoom,           {.f = -1} },
-	{ MODKEY|MOD_MASK_SHIFT, XKB_KEY_Home,      zoomreset,      {.f =  0} },
-	{ MOD_MASK_SHIFT,        XKB_KEY_Insert,    selpaste,       {.i =  0} },
-    { MODKEY|MOD_MASK_SHIFT, XKB_KEY_Insert,    clippaste,      {.i =  0} },
-    { MODKEY|MOD_MASK_SHIFT, XKB_KEY_C,         clipcopy,       {.i =  0} },
-    { MODKEY|MOD_MASK_SHIFT, XKB_KEY_V,         clippaste,      {.i =  0} },
-	{ MODKEY,                XKB_KEY_Num_Lock,  numlock,        {.i =  0} },
-	{ MODKEY,                XKB_KEY_Control_L, iso14755,       {.i =  0} },
+	/* modifier        key                function        argument */
+	{ MOD_MASK_ANY,    XKB_KEY_Break,     sendbreak,      {.i =  0} },
+	{ MOD_MASK_CTRL,   XKB_KEY_Print,     toggleprinter,  {.i =  0} },
+	{ MOD_MASK_SHIFT,  XKB_KEY_Print,     printscreen,    {.i =  0} },
+	{ MOD_MASK_ANY,    XKB_KEY_Print,     printsel,       {.i =  0} },
+	{ TERMMOD,         XKB_KEY_Prior,     zoom,           {.f = +1} },
+	{ TERMMOD,         XKB_KEY_Next,      zoom,           {.f = -1} },
+	{ TERMMOD,         XKB_KEY_Home,      zoomreset,      {.f =  0} },
+	{ TERMMOD,         XKB_KEY_C,         clipcopy,       {.i =  0} },
+    { TERMMOD,         XKB_KEY_V,         clippaste,      {.i =  0} },
+    { TERMMOD,         XKB_KEY_Y,         selpaste,       {.i =  0} },
+	{ TERMMOD,         XKB_KEY_Num_Lock,  numlock,        {.i =  0} },
+	{ TERMMOD,         XKB_KEY_I,         iso14755,       {.i =  0} },
 };
 
 /*
