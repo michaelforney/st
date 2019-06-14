@@ -3,24 +3,17 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
-#include <locale.h>
 #include <pwd.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <signal.h>
-#include <stdint.h>
 #include <sys/ioctl.h>
 #include <sys/select.h>
-#include <sys/stat.h>
-#include <sys/time.h>
 #include <sys/types.h>
 #include <sys/wait.h>
-#include <termios.h>
-#include <time.h>
 #include <unistd.h>
-#include <libgen.h>
 #include <wchar.h>
 
 #include "st.h"
@@ -36,7 +29,6 @@
 
 /* Arbitrary sizes */
 #define UTF_INVALID   0xFFFD
-// #define ESC_BUF_SIZ   (128*UTF_SIZ) // Required in st-wl.h
 #define ESC_ARG_SIZ   16
 #define STR_BUF_SIZ   ESC_BUF_SIZ
 #define STR_ARG_SIZ   ESC_ARG_SIZ
@@ -95,6 +87,51 @@ enum escape_state {
 	ESC_DCS        =128,
 };
 
+typedef struct {
+	Glyph attr; /* current char attributes */
+	int x;
+	int y;
+	char state;
+} TCursor;
+
+typedef struct {
+	int mode;
+	int type;
+	int snap;
+	/*
+	 * Selection variables:
+	 * nb – normalized coordinates of the beginning of the selection
+	 * ne – normalized coordinates of the end of the selection
+	 * ob – original coordinates of the beginning of the selection
+	 * oe – original coordinates of the end of the selection
+	 */
+	struct {
+		int x, y;
+	} nb, ne, ob, oe;
+
+	int alt;
+} Selection;
+
+/* Internal representation of the screen */
+typedef struct {
+	int row;      /* nb row */
+	int col;      /* nb col */
+	Line *line;   /* screen */
+	Line *alt;    /* alternate screen */
+	int *dirty;   /* dirtyness of lines */
+	TCursor c;    /* cursor */
+	int ocx;      /* old cursor col */
+	int ocy;      /* old cursor row */
+	int top;      /* top    scroll limit */
+	int bot;      /* bottom scroll limit */
+	int mode;     /* terminal mode flags */
+	int esc;      /* escape state flags */
+	char trantbl[4]; /* charset table translation */
+	int charset;  /* current charset */
+	int icharset; /* selected charset for sequence */
+	int *tabs;
+} Term;
+
 /* CSI Escape sequence structs */
 /* ESC '[' [[ [<priv>] <arg> [;]] <mode> [<mode>]] */
 typedef struct {
@@ -116,8 +153,7 @@ typedef struct {
 	int narg;              /* nb of args */
 } STREscape;
 
-
-static void execsh(char **);
+static void execsh(char *, char **);
 static void stty(char **);
 static void sigchld(int);
 static void ttywriteraw(const char *, size_t);
@@ -168,28 +204,28 @@ static void tstrsequence(uchar);
 
 static void drawregion(int, int, int, int);
 
+static void selnormalize(void);
 static void selscroll(int, int);
 static void selsnap(int *, int *, int);
 
 static Rune utf8decodebyte(char, size_t *);
 static char utf8encodebyte(Rune, size_t);
-static char *utf8strchr(char *s, Rune u);
+static char *utf8strchr(char *, Rune);
 static size_t utf8validate(Rune *, size_t);
 
 static char *base64dec(const char *);
+static char base64dec_getc(const char **);
 
 static ssize_t xwrite(int, const char *, size_t);
 
 /* Globals */
-Term term;
-int cmdfd;
-pid_t pid;
-int oldbutton   = 3; /* button event on startup: 3 = release */
-
+static Term term;
 static Selection sel;
 static CSIEscape csiescseq;
 static STREscape strescseq;
 static int iofd = 1;
+static int cmdfd;
+static pid_t pid;
 
 static uchar utfbyte[UTF_SIZ + 1] = {0x80,    0, 0xC0, 0xE0, 0xF0};
 static uchar utfmask[UTF_SIZ + 1] = {0xC0, 0x80, 0xE0, 0xF0, 0xF8};
@@ -607,7 +643,7 @@ getsel(void)
 		 * The best solution seems like to produce '\n' when
 		 * something is copied from st and convert '\n' to
 		 * '\r', when something to be pasted is received by
-		 * st-wl.
+		 * st.
 		 * FIXME: Fix the computer world.
 		 */
 		if ((y < sel.ne.y || lastx >= linelen) && !(last->mode & ATTR_WRAP))
@@ -639,7 +675,7 @@ die(const char *errstr, ...)
 }
 
 void
-execsh(char **args)
+execsh(char *cmd, char **args)
 {
 	char *sh, *prog;
 	const struct passwd *pw;
@@ -653,7 +689,7 @@ execsh(char **args)
 	}
 
 	if ((sh = getenv("SHELL")) == NULL)
-		sh = (pw->pw_shell[0]) ? pw->pw_shell : shell;
+		sh = (pw->pw_shell[0]) ? pw->pw_shell : cmd;
 
 	if (args)
 		prog = args[0];
@@ -725,8 +761,8 @@ stty(char **args)
 	    perror("Couldn't call stty");
 }
 
-void
-ttynew(char *line, char *out, char **args)
+int
+ttynew(char *line, char *cmd, char *out, char **args)
 {
 	int m, s;
 
@@ -745,7 +781,7 @@ ttynew(char *line, char *out, char **args)
 			die("open line failed: %s\n", strerror(errno));
 		dup2(cmdfd, 0);
 		stty(args);
-		return;
+		return cmdfd;
 	}
 
 	/* seems to work fine on linux, openbsd and freebsd */
@@ -766,7 +802,7 @@ ttynew(char *line, char *out, char **args)
 			die("ioctl TIOCSCTTY failed: %s\n", strerror(errno));
 		close(s);
 		close(m);
-		execsh(args);
+		execsh(cmd, args);
 		break;
 	default:
 		close(s);
@@ -774,6 +810,7 @@ ttynew(char *line, char *out, char **args)
 		signal(SIGCHLD, sigchld);
 		break;
 	}
+	return cmdfd;
 }
 
 size_t
@@ -895,6 +932,13 @@ ttyresize(int tw, int th)
 	w.ws_ypixel = th;
 	if (ioctl(cmdfd, TIOCSWINSZ, &w) < 0)
 		fprintf(stderr, "Couldn't set window size: %s\n", strerror(errno));
+}
+
+void
+ttyhangup()
+{
+	/* Send SIGHUP to shell */
+	kill(pid, SIGHUP);
 }
 
 int
@@ -1649,7 +1693,6 @@ csihandle(void)
 		tputtab(csiescseq.arg[0]);
 		break;
 	case 'J': /* ED -- Clear screen */
-		selclear();
 		switch (csiescseq.arg[0]) {
 		case 0: /* below */
 			tclearregion(term.c.x, term.c.y, term.col-1, term.c.y);
@@ -1817,8 +1860,8 @@ strhandle(void)
 
 				dec = base64dec(strescseq.args[2]);
 				if (dec) {
-                    xsetsel(dec);
-                    xclipcopy();
+					xsetsel(dec);
+					xclipcopy();
 				} else {
 					fprintf(stderr, "erresc: invalid base64\n");
 				}
@@ -2105,7 +2148,7 @@ tcontrolcode(uchar ascii)
 			/* backwards compatibility to xterm */
 			strhandle();
 		} else {
-            xbell();
+			xbell();
 		}
 		break;
 	case '\033': /* ESC */
@@ -2317,7 +2360,7 @@ tputc(Rune u)
 		if (strescseq.len+len >= sizeof(strescseq.buf)-1) {
 			/*
 			 * Here is a bug in terminals. If the user never sends
-			 * some code to stop the str or esc command, then st-wl
+			 * some code to stop the str or esc command, then st
 			 * will stop responding. But this is better than
 			 * silently failing with unknown characters. At least
 			 * then users will report back.
@@ -2547,10 +2590,23 @@ drawregion(int x1, int y1, int x2, int y2)
 void
 draw(void)
 {
+	int cx = term.c.x;
+
 	if (!xstartdraw())
 		return;
+
+	/* adjust cursor position */
+	LIMIT(term.ocx, 0, term.col-1);
+	LIMIT(term.ocy, 0, term.row-1);
+	if (term.line[term.ocy][term.ocx].mode & ATTR_WDUMMY)
+		term.ocx--;
+	if (term.line[term.c.y][cx].mode & ATTR_WDUMMY)
+		cx--;
+
 	drawregion(0, 0, term.col, term.row);
-	xdrawcursor();
+	xdrawcursor(cx, term.c.y, term.line[term.c.y][cx],
+			term.ocx, term.ocy, term.line[term.ocy][term.ocx]);
+	term.ocx = cx, term.ocy = term.c.y;
 	xfinishdraw();
 }
 

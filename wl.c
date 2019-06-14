@@ -1,8 +1,8 @@
 /* See LICENSE for license details. */
 #include <errno.h>
+#include <limits.h>
 #include <locale.h>
 #include <signal.h>
-#include <stdint.h>
 #include <sys/select.h>
 #include <time.h>
 #include <unistd.h>
@@ -84,6 +84,16 @@ static void zoomreset(const Arg *);
 
 /* Macros */
 #define IS_SET(flag)		((win.mode & (flag)) != 0)
+
+/* Purely graphic info */
+typedef struct {
+    int tw, th; /* tty width and height */
+    int w, h; /* window width and height */
+    int ch; /* char height */
+    int cw; /* char width  */
+    int mode; /* window state/mode flags */
+    int cursor; /* cursor style */
+} TermWindow;
 
 typedef struct {
     struct xkb_context *ctx;
@@ -170,11 +180,12 @@ typedef struct {
 
 /* TODO: Categorize these */
 static void wlselpaste(void);
-static int x2col(int);
-static int y2row(int);
+static int evcol(int);
+static int evrow(int);
 static int match(uint, uint);
 static char *kmap(xkb_keysym_t, uint);
 static void wlresize(int, int);
+static void wlinit(int, int);
 static void cresize(int, int);
 static void wlloadfonts(char *, double);
 static void wlunloadfonts(void);
@@ -308,6 +319,8 @@ static char *opt_line  = NULL;
 static char *opt_name  = NULL;
 static char *opt_title = NULL;
 
+static int oldbutton = 3; /* button event on startup: 3 = release */
+
 void
 xbell(void)
 {
@@ -346,21 +359,19 @@ xsetcursor(int cursor)
 }
 
 int
-x2col(int x)
+evcol(int x)
 {
     x -= borderpx;
-    x /= win.cw;
-
-    return LIMIT(x, 0, term.col-1);
+    LIMIT(x, 0, win.tw - 1);
+    return x / win.cw;
 }
 
 int
-y2row(int y)
+evrow(int y)
 {
     y -= borderpx;
-    y /= win.ch;
-
-    return LIMIT(y, 0, term.row-1);
+    LIMIT(y, 0, win.th - 1);
+    return y / win.ch;
 }
 
 int
@@ -498,7 +509,7 @@ mousesel(int done)
         }
     }
 
-    selextend(x2col(wl.px), y2row(wl.py), seltype, done);
+    selextend(evcol(wl.px), evrow(wl.py), seltype, done);
 	if (done)
 		setsel(getsel(), wl.globalserial);
 }
@@ -562,7 +573,7 @@ wlmousereportbutton(uint32_t button, uint32_t state)
 void
 wlmousereportmotion(wl_fixed_t fx, wl_fixed_t fy)
 {
-    int x = x2col(wl_fixed_to_int(fx)), y = y2row(wl_fixed_to_int(fy));
+    int x = evcol(wl_fixed_to_int(fx)), y = evrow(wl_fixed_to_int(fy));
 
     if (x == oldx && y == oldy)
         return;
@@ -665,7 +676,7 @@ ptrbutton(void * data, struct wl_pointer * pointer, uint32_t serial,
             wlsel.tclick2 = wlsel.tclick1;
             wlsel.tclick1 = time;
 
-			selstart(x2col(wl.px), y2row(wl.py), snap);
+			selstart(evcol(wl.px), evrow(wl.py), snap);
         }
         break;
     }
@@ -993,7 +1004,8 @@ void
 xdgtoplevelclose(void *data, struct xdg_toplevel *toplevel)
 {
     /* Send SIGHUP to shell */
-    kill(pid, SIGHUP);
+	pid_t thispid = getpid();
+    kill(thispid, SIGHUP);
     exit(0);
 }
 
@@ -1242,16 +1254,6 @@ wlneeddraw(void)
 int
 xstartdraw(void)
 {
-    int y, y0;
-
-    for (y = 0; y <= term.bot; ++y) {
-        if (!term.dirty[y])
-            continue;
-        for (y0 = y; y <= term.bot && term.dirty[y]; ++y);
-        wl_surface_damage(wl.surface, 0, borderpx + y0 * win.ch,
-                win.w, (y - y0) * win.ch);
-    }
-
     wld_set_target_buffer(wld.renderer, wld.buffer);
 
     return 1; // Should be IS_SET(MODE_VISIBLE), but this results in no window.
@@ -1265,14 +1267,10 @@ xdrawline(Line line, int x1, int y, int x2)
     Glyph base, new;
     char buf[DRAW_BUF_SIZ];
 
-    //if (!term.dirty[y]) // TODO: Check out why this must be commented out
-    //    return;
-
-    term.dirty[y] = 0;
-    base = term.line[y][0];
+    base = line[0];
     ic = ib = ox = 0;
     for (x = x1; x < x2; x++) {
-        new = term.line[y][x];
+        new = line[x];
         if (new.mode == ATTR_WDUMMY)
             continue;
         if (selected(x, y))
@@ -1290,7 +1288,9 @@ xdrawline(Line line, int x1, int y, int x2)
         ic += (new.mode & ATTR_WIDE)? 2 : 1;
     }
     if (ib > 0)
-        wldraws(buf, base, ox, y, ic, ib);
+		wldraws(buf, base, ox, y, ic, ib);
+
+	wl_surface_damage(wl.surface, 0, borderpx + y * win.ch, win.w, win.ch);
 }
 
 void
@@ -1428,15 +1428,15 @@ wldraws(char *s, Glyph base, int x, int y, int charlen, int bytelen)
     /* Intelligent cleaning up of the borders. */
     if (x == 0) {
         wlclear(0, (y == 0)? 0 : winy, borderpx,
-            ((y >= term.row-1)? win.h : (winy + win.ch)));
+            ((winy + win.ch >= borderpx + win.th)? win.h : (winy + win.ch)));
     }
-    if (x + charlen >= term.col) {
+    if (winx + width >= borderpx + win.tw) {
         wlclear(winx + width, (y == 0)? 0 : winy, win.w,
-            ((y >= term.row-1)? win.h : (winy + win.ch)));
+            ((winy + win.ch >= borderpx + win.th)? win.h : (winy + win.ch)));
     }
     if (y == 0)
         wlclear(winx, 0, winx + width, borderpx);
-    if (y == term.row-1)
+    if (winy + win.ch >= borderpx + win.th)
         wlclear(winx, winy + win.ch, winx + width, win.h);
 
     /* Clean up the region we want to draw to. */
@@ -1588,43 +1588,32 @@ wlloadcursor(void)
 }
 
 void
-xdrawcursor(void)
+xdrawcursor(int cx, int cy, Glyph g, int ox, int oy, Glyph og)
 {
-    static int oldx = 0, oldy = 0;
-    int curx;
-    Glyph g = {' ', ATTR_NULL, defaultbg, defaultcs}, og;
     uint32_t drawcol;
 
-    LIMIT(oldx, 0, term.col-1);
-    LIMIT(oldy, 0, term.row-1);
-
-    curx = term.c.x;
-
-    /* adjust position if in dummy */
-    if (term.line[oldy][oldx].mode & ATTR_WDUMMY)
-        oldx--;
-    if (term.line[term.c.y][curx].mode & ATTR_WDUMMY)
-        curx--;
-
-    /* remove the old cursor */
-    og = term.line[oldy][oldx];
-    if (selected(oldx, oldy))
+	/* remove the old cursor */
+    if (selected(ox, oy))
         og.mode ^= ATTR_REVERSE;
-    wldrawglyph(og, oldx, oldy);
-    if (oldx != curx || oldy != term.c.y) {
-        wl_surface_damage(wl.surface, borderpx + oldx * win.cw,
-                borderpx + oldy * win.ch, win.cw, win.ch);
-    }
+    wldrawglyph(og, ox, oy);
 
-    g.u = term.line[term.c.y][term.c.x].u;
+    if (IS_SET(MODE_HIDE))
+		return;
 
     /*
      * Select the right color for the right mode.
      */
+    g.mode &= ATTR_BOLD|ATTR_ITALIC|ATTR_UNDERLINE|ATTR_STRUCK|ATTR_WIDE;
+
+    if (ox != cx || oy != cy) {
+        wl_surface_damage(wl.surface, borderpx + ox * win.cw,
+                borderpx + oy * win.ch, win.cw, win.ch);
+    }
+
     if (IS_SET(MODE_REVERSE)) {
         g.mode |= ATTR_REVERSE;
         g.bg = defaultfg;
-        if (selected(term.c.x, term.c.y)) {
+        if (selected(cx, cy)) {
             drawcol = dc.col[defaultcs];
             g.fg = defaultrcs;
         } else {
@@ -1632,66 +1621,61 @@ xdrawcursor(void)
             g.fg = defaultcs;
         }
     } else {
-        if (selected(term.c.x, term.c.y)) {
-            drawcol = dc.col[defaultrcs];
+        if (selected(cx, cy)) {
             g.fg = defaultfg;
             g.bg = defaultrcs;
         } else {
-            drawcol = dc.col[defaultcs];
+            g.fg = defaultbg;
+            g.bg = defaultrcs;
         }
+		drawcol = dc.col[g.bg];
     }
-
-    if (IS_SET(MODE_HIDE))
-        return;
 
     /* draw the new one */
     if (IS_SET(MODE_FOCUSED)) {
         switch (win.cursor) {
         case 7: /* st-wl extension: snowman */
-            utf8decode("☃", &g.u, UTF_SIZ);
+			g.u = 0x2603;
         case 0: /* Blinking Block */
         case 1: /* Blinking Block (Default) */
         case 2: /* Steady Block */
-            g.mode |= term.line[term.c.y][curx].mode & ATTR_WIDE;
-            wldrawglyph(g, term.c.x, term.c.y);
+            wldrawglyph(g, cx, cy);
             break;
         case 3: /* Blinking Underline */
         case 4: /* Steady Underline */
             wld_fill_rectangle(wld.renderer, drawcol,
-                    borderpx + curx * win.cw,
-                    borderpx + (term.c.y + 1) * win.ch - \
-                        cursorthickness,
+                    borderpx + cx * win.cw,
+                    borderpx + (cy + 1) * win.ch - cursorthickness,
                     win.cw, cursorthickness);
             break;
         case 5: /* Blinking bar */
         case 6: /* Steady bar */
             wld_fill_rectangle(wld.renderer, drawcol,
-                    borderpx + curx * win.cw,
-                    borderpx + term.c.y * win.ch,
+                    borderpx + cx * win.cw,
+                    borderpx + cy * win.ch,
                     cursorthickness, win.ch);
             break;
         }
     } else {
         wld_fill_rectangle(wld.renderer, drawcol,
-                borderpx + curx * win.cw,
-                borderpx + term.c.y * win.ch,
+                borderpx + cx * win.cw,
+                borderpx + cy * win.ch,
                 win.cw - 1, 1);
         wld_fill_rectangle(wld.renderer, drawcol,
-                borderpx + curx * win.cw,
-                borderpx + term.c.y * win.ch,
+                borderpx + cx * win.cw,
+                borderpx + cy * win.ch,
                 1, win.ch - 1);
         wld_fill_rectangle(wld.renderer, drawcol,
-                borderpx + (curx + 1) * win.cw - 1,
-                borderpx + term.c.y * win.ch,
+                borderpx + (cx + 1) * win.cw - 1,
+                borderpx + cy * win.ch,
                 1, win.ch - 1);
         wld_fill_rectangle(wld.renderer, drawcol,
-                borderpx + curx * win.cw,
-                borderpx + (term.c.y + 1) * win.ch - 1,
+                borderpx + cx * win.cw,
+                borderpx + (cy + 1) * win.ch - 1,
                 win.cw, 1);
     }
-    wl_surface_damage(wl.surface, borderpx + curx * win.cw,
-            borderpx + term.c.y * win.ch, win.cw, win.ch);
-    oldx = curx, oldy = term.c.y;
+    wl_surface_damage(wl.surface, borderpx + cx * win.cw,
+            borderpx + cy * win.ch, win.cw, win.ch);
 }
 
 void
@@ -1799,7 +1783,7 @@ datasrccancelled(void *data, struct wl_data_source *source)
 }
 
 void
-wlinit(void)
+wlinit(int cols, int rows)
 {
     struct wl_registry *registry;
 
@@ -1843,8 +1827,8 @@ wlinit(void)
     wlloadcursor();
 
     wl.vis = 0;
-    win.h = 2 * borderpx + term.row * win.ch;
-    win.w = 2 * borderpx + term.col * win.cw;
+    win.h = 2 * borderpx + rows * win.ch;
+    win.w = 2 * borderpx + cols * win.cw;
 
     wl.surface = wl_compositor_create_surface(wl.cmp);
     wl_surface_add_listener(wl.surface, &surflistener, NULL);
@@ -1873,12 +1857,13 @@ run(void)
 {
     fd_set rfd;
     int wlfd = wl_display_get_fd(wl.dpy), blinkset = 0;
+    int ttyfd;
     struct timespec drawtimeout, *tv = NULL, now, last, lastblink;
     ulong msecs;
 
     /* Look for initial configure. */
     wl_display_roundtrip(wl.dpy);
-    ttynew(opt_line, opt_io, opt_cmd);
+    ttyfd = ttynew(opt_line, shell, opt_io, opt_cmd);
     cresize(win.w, win.h);
     draw();
 
@@ -1887,16 +1872,16 @@ run(void)
 
     for (;;) {
         FD_ZERO(&rfd);
-        FD_SET(cmdfd, &rfd);
+        FD_SET(ttyfd, &rfd);
         FD_SET(wlfd, &rfd);
 
-        if (pselect(MAX(wlfd, cmdfd)+1, &rfd, NULL, NULL, tv, NULL) < 0) {
+        if (pselect(MAX(wlfd, ttyfd)+1, &rfd, NULL, NULL, tv, NULL) < 0) {
             if (errno == EINTR)
                 continue;
             die("select failed: %s\n", strerror(errno));
         }
 
-        if (FD_ISSET(cmdfd, &rfd)) {
+        if (FD_ISSET(ttyfd, &rfd)) {
             ttyread();
             if (blinktimeout) {
                 blinkset = tattrset(ATTR_BLINK);
@@ -2019,8 +2004,10 @@ run:
             opt_title = basename(xstrdup(argv[0]));
     }
     setlocale(LC_CTYPE, "");
-    tnew(MAX(cols, 1), MAX(rows, 1));
-    wlinit();
+    cols = MAX(cols, 1);
+    rows = MAX(rows, 1);
+    tnew(cols, rows);
+    wlinit(cols, rows);
     selinit();
     run();
 

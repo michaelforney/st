@@ -1,5 +1,6 @@
 /* See LICENSE for license details. */
 #include <errno.h>
+#include <limits.h>
 #include <locale.h>
 #include <signal.h>
 #include <stdint.h>
