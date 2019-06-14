@@ -51,7 +51,6 @@ typedef struct {
     /* three valued logic variables: 0 indifferent, 1 on, -1 off */
     signed char appkey;    /* application keypad */
     signed char appcursor; /* application cursor */
-    signed char crlf;      /* crlf mode          */
 } Key;
 
 typedef struct {
@@ -74,6 +73,7 @@ typedef struct {
 /* function definitions used in config.h */
 static void clipcopy(const Arg *);
 static void clippaste(const Arg *);
+static void numlock(const Arg *);
 static void selpaste(const Arg *);
 static void zoom(const Arg *);
 static void zoomabs(const Arg *);
@@ -81,6 +81,9 @@ static void zoomreset(const Arg *);
 
 /* config.h for applying patches and the configuration. */
 #include "config.h"
+
+/* Macros */
+#define IS_SET(flag)		((win.mode & (flag)) != 0)
 
 typedef struct {
     struct xkb_context *ctx;
@@ -166,6 +169,7 @@ typedef struct {
 
 
 /* TODO: Categorize these */
+static void wlselpaste(void);
 static int x2col(int);
 static int y2row(int);
 static int match(uint, uint);
@@ -223,7 +227,6 @@ static void wlclear(int, int, int, int);
 static void wldraws(char *, Glyph, int, int, int, int);
 static void wldrawglyph(Glyph, int, int);
 static void wlloadcursor(void);
-static void wldrawcursor(void);
 
 static void regglobal(void *, struct wl_registry *, uint32_t, const char *,
                 uint32_t);
@@ -275,11 +278,6 @@ static struct wl_data_source_listener datasrclistener = { datasrctarget,
     datasrcsend, datasrccancelled };
 static struct wl_data_offer_listener dataofferlistener = { dataofferoffer };
 
-enum window_state {
-    WIN_VISIBLE = 1,
-    WIN_FOCUSED = 2
-};
-
 /* Font Ring Cache */
 enum {
     FRC_NORMAL,
@@ -310,8 +308,23 @@ static char *opt_line  = NULL;
 static char *opt_name  = NULL;
 static char *opt_title = NULL;
 
+void
+xsetmode(int set, unsigned int flags)
+{
+    int mode = win.mode;
+    MODBIT(win.mode, set, flags);
+    if ((win.mode & MODE_REVERSE) != (mode & MODE_REVERSE))
+        redraw();
+}
+
+void
+numlock(const Arg *dummy)
+{
+    win.mode ^= MODE_NUMLOCK;
+}
+
 int
-wlsetcursor(int cursor)
+xsetcursor(int cursor)
 {
     DEFAULT(cursor, 1);
     if (!BETWEEN(cursor, 0, 6))
@@ -369,13 +382,10 @@ kmap(xkb_keysym_t k, uint state)
 
         if (IS_SET(MODE_APPKEYPAD) ? kp->appkey < 0 : kp->appkey > 0)
             continue;
-        if (term.numlock && kp->appkey == 2)
+        if (IS_SET(MODE_NUMLOCK) && kp->appkey == 2)
             continue;
 
         if (IS_SET(MODE_APPCURSOR) ? kp->appcursor < 0 : kp->appcursor > 0)
-            continue;
-
-        if (IS_SET(MODE_CRLF) ? kp->crlf < 0 : kp->crlf > 0)
             continue;
 
         return kp->s;
@@ -434,7 +444,7 @@ zoomreset(const Arg *arg)
 }
 
 void
-wlclipcopy(void)
+xclipcopy(void)
 {
 	clipcopy(NULL);
 }
@@ -458,7 +468,7 @@ selpaste(const Arg * dummy)
 }
 
 void
-wlsetsel(char * buf)
+xsetsel(char * buf)
 {
 	setsel(buf, wl.globalserial);
 }
@@ -776,7 +786,7 @@ void
 kbdenter(void *data, struct wl_keyboard *keyboard, uint32_t serial,
          struct wl_surface *surface, struct wl_array *keys)
 {
-    win.state |= WIN_FOCUSED;
+    win.mode |= MODE_FOCUSED;
     if (IS_SET(MODE_FOCUS))
         ttywrite("\033[I", 3, 0);
     /* need to redraw the cursor */
@@ -789,7 +799,7 @@ kbdleave(void *data, struct wl_keyboard *keyboard, uint32_t serial,
 {
     /* selection offers are invalidated when we lose keyboard focus */
     wl.seloffer = NULL;
-    win.state &= ~WIN_FOCUSED;
+    win.mode &= ~MODE_FOCUSED;
     if (IS_SET(MODE_FOCUS))
         ttywrite("\033[O", 3, 0);
     /* need to redraw the cursor */
@@ -919,7 +929,7 @@ wlresize(int col, int row)
 }
 
 void
-wlsettitle(char *title)
+xsettitle(char *title)
 {
 	DEFAULT(title, "st-wl");
     xdg_toplevel_set_title(wl.xdgtoplevel, title);
@@ -929,15 +939,15 @@ void
 surfenter(void *data, struct wl_surface *surface, struct wl_output *output)
 {
     wl.vis++;
-    if (!(win.state & WIN_VISIBLE))
-        win.state |= WIN_VISIBLE;
+    if (!(IS_SET(MODE_VISIBLE)))
+        win.mode |= MODE_VISIBLE;
 }
 
 void
 surfleave(void *data, struct wl_surface *surface, struct wl_output *output)
 {
     if (--wl.vis == 0)
-        win.state &= ~WIN_VISIBLE;
+        win.mode &= ~MODE_VISIBLE;
 }
 
 void
@@ -945,7 +955,7 @@ framedone(void *data, struct wl_callback *callback, uint32_t msecs)
 {
     wl_callback_destroy(callback);
     wl.framecb = NULL;
-    if (wl.needdraw && win.state & WIN_VISIBLE) {
+    if (wl.needdraw && IS_SET(MODE_VISIBLE)) {
         draw();
     }
 }
@@ -1008,7 +1018,7 @@ wlloadcolor(int i, const char *name, uint32_t *color)
 }
 
 void
-wlloadcols(void)
+xloadcols(void)
 {
     int i;
 
@@ -1025,7 +1035,7 @@ wlloadcols(void)
 }
 
 int
-wlsetcolorname(int x, const char *name)
+xsetcolorname(int x, const char *name)
 {
     uint32_t color;
 
@@ -1217,8 +1227,8 @@ wlneeddraw(void)
     wl.needdraw = true;
 }
 
-void
-draw(void)
+int
+xstartdraw(void)
 {
     int y, y0;
 
@@ -1231,7 +1241,49 @@ draw(void)
     }
 
     wld_set_target_buffer(wld.renderer, wld.buffer);
-    drawregion(0, 0, term.col, term.row);
+
+    return 1; // Should be IS_SET(MODE_VISIBLE), but this results in no window.
+    // TODO: Implement proper MODE_VISIBLE handling.
+}
+
+void
+xdrawline(Line line, int x1, int y, int x2)
+{
+    int ic, ib, x, ox;
+    Glyph base, new;
+    char buf[DRAW_BUF_SIZ];
+
+    //if (!term.dirty[y]) // TODO: Check out why this must be commented out
+    //    return;
+
+    term.dirty[y] = 0;
+    base = term.line[y][0];
+    ic = ib = ox = 0;
+    for (x = x1; x < x2; x++) {
+        new = term.line[y][x];
+        if (new.mode == ATTR_WDUMMY)
+            continue;
+        if (selected(x, y))
+            new.mode ^= ATTR_REVERSE;
+        if (ib > 0 && (ATTRCMP(base, new) || ib >= DRAW_BUF_SIZ-UTF_SIZ)) {
+            wldraws(buf, base, ox, y, ic, ib);
+            ic = ib = 0;
+        }
+        if (ib == 0) {
+            ox = x;
+            base = new;
+        }
+
+        ib += utf8encode(new.u, buf+ib);
+        ic += (new.mode & ATTR_WIDE)? 2 : 1;
+    }
+    if (ib > 0)
+        wldraws(buf, base, ox, y, ic, ib);
+}
+
+void
+xfinishdraw(void)
+{
     wl.framecb = wl_surface_frame(wl.surface);
     wl_callback_add_listener(wl.framecb, &framelistener, NULL);
     wld_flush(wld.renderer);
@@ -1244,45 +1296,6 @@ draw(void)
         wld.oldbuffer = 0;
     }
     wl.needdraw = false;
-}
-
-void
-drawregion(int x1, int y1, int x2, int y2)
-{
-    int ic, ib, x, y, ox;
-    Glyph base, new;
-    char buf[DRAW_BUF_SIZ];
-
-    for (y = y1; y < y2; y++) {
-        if (!term.dirty[y])
-            continue;
-
-        term.dirty[y] = 0;
-        base = term.line[y][0];
-        ic = ib = ox = 0;
-        for (x = x1; x < x2; x++) {
-            new = term.line[y][x];
-            if (new.mode == ATTR_WDUMMY)
-                continue;
-            if (selected(x, y))
-                new.mode ^= ATTR_REVERSE;
-            if (ib > 0 && (ATTRCMP(base, new)
-                    || ib >= DRAW_BUF_SIZ-UTF_SIZ)) {
-                wldraws(buf, base, ox, y, ic, ib);
-                ic = ib = 0;
-            }
-            if (ib == 0) {
-                ox = x;
-                base = new;
-            }
-
-            ib += utf8encode(new.u, buf+ib);
-            ic += (new.mode & ATTR_WIDE)? 2 : 1;
-        }
-        if (ib > 0)
-            wldraws(buf, base, ox, y, ic, ib);
-    }
-    wldrawcursor();
 }
 
 /*
@@ -1394,7 +1407,7 @@ wldraws(char *s, Glyph base, int x, int y, int charlen, int bytelen)
             | ((fg & 0xff) / 2);
     }
 
-    if (base.mode & ATTR_BLINK && term.mode & MODE_BLINK)
+    if (base.mode & ATTR_BLINK && win.mode & MODE_BLINK)
         fg = bg;
 
     if (base.mode & ATTR_INVISIBLE)
@@ -1563,7 +1576,7 @@ wlloadcursor(void)
 }
 
 void
-wldrawcursor(void)
+xdrawcursor(void)
 {
     static int oldx = 0, oldy = 0;
     int curx;
@@ -1620,7 +1633,7 @@ wldrawcursor(void)
         return;
 
     /* draw the new one */
-    if (win.state & WIN_FOCUSED) {
+    if (IS_SET(MODE_FOCUSED)) {
         switch (win.cursor) {
         case 7: /* st-wl extension: snowman */
             utf8decode("☃", &g.u, UTF_SIZ);
@@ -1814,7 +1827,7 @@ wlinit(void)
     wld.fontctx = wld_font_create_context();
     wlloadfonts(usedfont, 0);
 
-    wlloadcols();
+    xloadcols();
     wlloadcursor();
 
     wl.vis = 0;
@@ -1833,6 +1846,8 @@ wlinit(void)
     wl_surface_commit(wl.surface);
 
     wl.xkb.ctx = xkb_context_new(0);
+
+    win.mode = MODE_NUMLOCK;
     resettitle();
 
     wlsel.tclick1 = 0;
@@ -1874,7 +1889,7 @@ run(void)
             if (blinktimeout) {
                 blinkset = tattrset(ATTR_BLINK);
                 if (!blinkset)
-                    MODBIT(term.mode, 0, MODE_BLINK);
+                    MODBIT(win.mode, 0, MODE_BLINK);
             }
         }
 
@@ -1889,7 +1904,7 @@ run(void)
         if (blinkset && blinktimeout) {
             if (TIMEDIFF(now, lastblink) >= blinktimeout) {
                 tsetdirtattr(ATTR_BLINK);
-                term.mode ^= MODE_BLINK;
+                win.mode ^= MODE_BLINK;
                 lastblink = now;
             } else {
                 msecs = MIN(msecs, blinktimeout - \
@@ -1910,7 +1925,7 @@ run(void)
             }
         }
 
-        if (wl.needdraw && win.state & WIN_VISIBLE) {
+        if (wl.needdraw && IS_SET(MODE_VISIBLE)) {
             if (!wl.framecb) {
                 draw();
             }

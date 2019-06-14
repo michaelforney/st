@@ -42,6 +42,7 @@
 #define STR_ARG_SIZ   ESC_ARG_SIZ
 
 /* macros */
+#define IS_SET(flag)		((term.mode & (flag)) != 0)
 #define NUMMAXLEN(x)		((int)(sizeof(x) * 2.56 + 0.5) + 1)
 #define ISCONTROLC0(c)		(BETWEEN(c, 0, 0x1f) || (c) == '\177')
 #define ISCONTROLC1(c)		(BETWEEN(c, 0x80, 0x9f))
@@ -49,7 +50,18 @@
 #define ISDELIM(u)		(utf8strchr(worddelimiters, u) != NULL)
 
 /* constants */
-#define ISO14755CMD		"dmenu -p codepoint: </dev/null"
+#define ISO14755CMD		"dmenu -w \"$WINDOWID\" -p codepoint: </dev/null"
+
+enum term_mode {
+	MODE_WRAP        = 1 << 0,
+	MODE_INSERT      = 1 << 1,
+	MODE_ALTSCREEN   = 1 << 2,
+	MODE_CRLF        = 1 << 3,
+	MODE_ECHO        = 1 << 4,
+	MODE_PRINT       = 1 << 5,
+	MODE_UTF8        = 1 << 6,
+	MODE_SIXEL       = 1 << 7,
+};
 
 enum cursor_movement {
 	CURSOR_SAVE,
@@ -108,6 +120,7 @@ typedef struct {
 static void execsh(char **);
 static void stty(char **);
 static void sigchld(int);
+static void ttywriteraw(const char *, size_t);
 
 static void csidump(void);
 static void csihandle(void);
@@ -152,6 +165,8 @@ static void tdefutf8(char);
 static int32_t tdefcolor(int *, int *, int);
 static void tdeftran(char);
 static void tstrsequence(uchar);
+
+static void drawregion(int, int, int, int);
 
 static void selscroll(int, int);
 static void selsnap(int *, int *, int);
@@ -787,12 +802,37 @@ ttyread(void)
 void
 ttywrite(const char *s, size_t n, int may_echo)
 {
-	fd_set wfd, rfd;
-	ssize_t r;
-	size_t lim = 256;
+	const char *next;
 
 	if (may_echo && IS_SET(MODE_ECHO))
 		twrite(s, n, 1);
+
+	if (!IS_SET(MODE_CRLF)) {
+		ttywriteraw(s, n);
+		return;
+	}
+
+	/* This is similar to how the kernel handles ONLCR for ttys */
+	while (n > 0) {
+		if (*s == '\r') {
+			next = s + 1;
+			ttywriteraw("\r\n", 2);
+		} else {
+			next = memchr(s, '\r', n);
+			DEFAULT(next, s + n);
+			ttywriteraw(s, next - s);
+		}
+		n -= next - s;
+		s = next;
+	}
+}
+
+void
+ttywriteraw(const char *s, size_t n)
+{
+	fd_set wfd, rfd;
+	ssize_t r;
+	size_t lim = 256;
 
 	/*
 	 * Remember that we are using a pty, which might be a modem line.
@@ -954,8 +994,6 @@ tnew(int col, int row)
 {
 	term = (Term){ .c = { .attr = { .fg = defaultfg, .bg = defaultbg } } };
 	tresize(col, row);
-	term.numlock = 1;
-
 	treset();
 }
 
@@ -1391,20 +1429,16 @@ tsetscroll(int t, int b)
 void
 tsetmode(int priv, int set, int *args, int narg)
 {
-	int *lim, mode;
-	int alt;
+	int alt, *lim;
 
 	for (lim = args + narg; args < lim; ++args) {
 		if (priv) {
 			switch (*args) {
 			case 1: /* DECCKM -- Cursor key */
-				MODBIT(term.mode, set, MODE_APPCURSOR);
+				xsetmode(set, MODE_APPCURSOR);
 				break;
 			case 5: /* DECSCNM -- Reverse video */
-				mode = term.mode;
-				MODBIT(term.mode, set, MODE_REVERSE);
-				if (mode != term.mode)
-					redraw();
+				xsetmode(set, MODE_REVERSE);
 				break;
 			case 6: /* DECOM -- Origin */
 				MODBIT(term.c.state, set, CURSOR_ORIGIN);
@@ -1424,36 +1458,36 @@ tsetmode(int priv, int set, int *args, int narg)
 			case 12: /* att610 -- Start blinking cursor (IGNORED) */
 				break;
 			case 25: /* DECTCEM -- Text Cursor Enable Mode */
-				MODBIT(term.mode, !set, MODE_HIDE);
+				xsetmode(!set, MODE_HIDE);
 				break;
 			case 9:    /* X10 mouse compatibility mode */
-                // xsetpointermotion(0); // Removed in wayland version
-				MODBIT(term.mode, 0, MODE_MOUSE);
-				MODBIT(term.mode, set, MODE_MOUSEX10);
+				// xsetpointermotion(0); // Disabled in wayland branch
+				xsetmode(0, MODE_MOUSE);
+				xsetmode(set, MODE_MOUSEX10);
 				break;
 			case 1000: /* 1000: report button press */
-                // xsetpointermotion(0); // Removed in wayland version
-				MODBIT(term.mode, 0, MODE_MOUSE);
-				MODBIT(term.mode, set, MODE_MOUSEBTN);
+				// xsetpointermotion(0); // Disabled in wayland branch
+				xsetmode(0, MODE_MOUSE);
+				xsetmode(set, MODE_MOUSEBTN);
 				break;
 			case 1002: /* 1002: report motion on button press */
-                // xsetpointermotion(0); // Removed in wayland version
-				MODBIT(term.mode, 0, MODE_MOUSE);
-				MODBIT(term.mode, set, MODE_MOUSEMOTION);
+				// xsetpointermotion(0); // Disabled in wayland branch
+				xsetmode(0, MODE_MOUSE);
+				xsetmode(set, MODE_MOUSEMOTION);
 				break;
 			case 1003: /* 1003: enable all mouse motions */
-                // xsetpointermotion(0); // Removed in wayland version
-				MODBIT(term.mode, 0, MODE_MOUSE);
-				MODBIT(term.mode, set, MODE_MOUSEMANY);
+				// xsetpointermotion(set); // Disabled in wayland branch
+				xsetmode(0, MODE_MOUSE);
+				xsetmode(set, MODE_MOUSEMANY);
 				break;
 			case 1004: /* 1004: send focus events to tty */
-				MODBIT(term.mode, set, MODE_FOCUS);
+				xsetmode(set, MODE_FOCUS);
 				break;
 			case 1006: /* 1006: extended reporting mode */
-				MODBIT(term.mode, set, MODE_MOUSESGR);
+				xsetmode(set, MODE_MOUSESGR);
 				break;
 			case 1034:
-				MODBIT(term.mode, set, MODE_8BIT);
+				xsetmode(set, MODE_8BIT);
 				break;
 			case 1049: /* swap screen & set/restore cursor as xterm */
 				if (!allowaltscreen)
@@ -1478,7 +1512,7 @@ tsetmode(int priv, int set, int *args, int narg)
 				tcursor((set) ? CURSOR_SAVE : CURSOR_LOAD);
 				break;
 			case 2004: /* 2004: bracketed paste mode */
-				MODBIT(term.mode, set, MODE_BRCKTPASTE);
+				xsetmode(set, MODE_BRCKTPASTE);
 				break;
 			/* Not implemented mouse modes. See comments there. */
 			case 1001: /* mouse highlight mode; can hang the
@@ -1499,8 +1533,8 @@ tsetmode(int priv, int set, int *args, int narg)
 			switch (*args) {
 			case 0:  /* Error (IGNORED) */
 				break;
-			case 2:  /* KAM -- keyboard action */
-				MODBIT(term.mode, set, MODE_KBDLOCK);
+			case 2:
+				xsetmode(set, MODE_KBDLOCK);
 				break;
 			case 4:  /* IRM -- Insertion-replacement */
 				MODBIT(term.mode, set, MODE_INSERT);
@@ -1718,7 +1752,7 @@ csihandle(void)
 	case ' ':
 		switch (csiescseq.mode[1]) {
 		case 'q': /* DECSCUSR -- Set Cursor Style */
-			if (wlsetcursor(csiescseq.arg[0]))
+			if (xsetcursor(csiescseq.arg[0]))
 				goto unknown;
 			break;
 		default:
@@ -1775,7 +1809,7 @@ strhandle(void)
 		case 1:
 		case 2:
 			if (narg > 1)
-				wlsettitle(strescseq.args[1]);
+				xsettitle(strescseq.args[1]);
 			return;
 		case 52:
 			if (narg > 2) {
@@ -1783,8 +1817,8 @@ strhandle(void)
 
 				dec = base64dec(strescseq.args[2]);
 				if (dec) {
-                    wlsetsel(dec);
-                    wlclipcopy();
+                    xsetsel(dec);
+                    xclipcopy();
 				} else {
 					fprintf(stderr, "erresc: invalid base64\n");
 				}
@@ -1797,7 +1831,7 @@ strhandle(void)
 			/* FALLTHROUGH */
 		case 104: /* color reset, here p = NULL */
 			j = (narg > 1) ? atoi(strescseq.args[1]) : -1;
-			if (wlsetcolorname(j, p)) {
+			if (xsetcolorname(j, p)) {
 				fprintf(stderr, "erresc: invalid color %s\n", p);
 			} else {
 				/*
@@ -1810,7 +1844,7 @@ strhandle(void)
 		}
 		break;
 	case 'k': /* old title set compatibility */
-		wlsettitle(strescseq.args[0]);
+		xsettitle(strescseq.args[0]);
 		return;
 	case 'P': /* DCS -- Device Control String */
 		term.mode |= ESC_DCS;
@@ -2205,13 +2239,13 @@ eschandle(uchar ascii)
 	case 'c': /* RIS -- Reset to inital state */
 		treset();
 		resettitle();
-		wlloadcols();
+		xloadcols();
 		break;
 	case '=': /* DECPAM -- Application keypad */
-		term.mode |= MODE_APPKEYPAD;
+		xsetmode(1, MODE_APPKEYPAD);
 		break;
 	case '>': /* DECPNM -- Normal keypad */
-		term.mode &= ~MODE_APPKEYPAD;
+		xsetmode(0, MODE_APPKEYPAD);
 		break;
 	case '7': /* DECSC -- Save Cursor */
 		tcursor(CURSOR_SAVE);
@@ -2495,18 +2529,35 @@ tresize(int col, int row)
 void
 resettitle(void)
 {
-    wlsettitle(NULL);
+	xsettitle(NULL);
+}
+
+void
+drawregion(int x1, int y1, int x2, int y2)
+{
+	int y;
+	for (y = y1; y < y2; y++) {
+		if (!term.dirty[y])
+			continue;
+
+		term.dirty[y] = 0;
+		xdrawline(term.line[y], x1, y, x2);
+	}
+}
+
+void
+draw(void)
+{
+	if (!xstartdraw())
+		return;
+	drawregion(0, 0, term.col, term.row);
+	xdrawcursor();
+	xfinishdraw();
 }
 
 void
 redraw(void)
 {
 	tfulldirt();
-	// draw(); // removed in wayland branch
-}
-
-void
-numlock(const Arg *dummy)
-{
-	term.numlock ^= 1;
+	// draw(); // disabled in wayland branch
 }
