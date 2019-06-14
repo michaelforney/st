@@ -134,12 +134,6 @@ typedef struct {
 } TermWindow;
 
 typedef struct {
-    uint b;
-    uint mask;
-    char *s;
-} MouseShortcut;
-
-typedef struct {
     int mode;
     int type;
     int snap;
@@ -154,12 +148,7 @@ typedef struct {
         int x, y;
     } nb, ne, ob, oe;
 
-    char *primary; //*clipboard, deprecated on wayland
     int alt;
-    uint32_t tclick1;
-    uint32_t tclick2;
-
-    struct wl_data_source *source;
 } Selection;
 
 typedef union {
@@ -169,48 +158,31 @@ typedef union {
     const void *v;
 } Arg;
 
-typedef struct {
-    uint mod;
-    xkb_keysym_t keysym;
-    void (*func)(const Arg *);
-    const Arg arg;
-} Shortcut;
-
-typedef struct {
-    xkb_keysym_t k;
-    uint mask;
-    char *s;
-    /* three valued logic variables: 0 indifferent, 1 on, -1 off */
-    signed char appkey;    /* application keypad */
-    signed char appcursor; /* application cursor */
-    signed char crlf;      /* crlf mode          */
-} Key;
-
-typedef struct {
-    int axis;
-    int dir;
-    uint mask;
-    char s[ESC_BUF_SIZ];
-} Axiskey;
-
 void die(const char *, ...);
 void redraw(void);
+
+void iso14755(const Arg *);
+void numlock(const Arg *);
+void printscreen(const Arg *);
+void printsel(const Arg *);
+void sendbreak(const Arg *);
+void toggleprinter(const Arg *);
 
 int tattrset(int);
 void tnew(int, int);
 void tresize(int, int);
-void tsetdirt(int, int);
 void tsetdirtattr(int);
 void ttynew(char *, char *, char **);
 size_t ttyread(void);
 void ttyresize(int, int);
-void ttysend(char *, size_t);
-void ttywrite(const char *, size_t);
+void ttywrite(const char *, size_t, int);
 
 void resettitle(void);
 
 void selclear(void);
 void selinit(void);
+void selstart(int, int, int);
+void selextend(int, int, int, int);
 void selnormalize(void);
 int selected(int, int);
 char *getsel(void);
@@ -223,55 +195,19 @@ void *xrealloc(void *, size_t);
 char *xstrdup(char *);
 
 /* Globals */
-extern TermWindow win;
 extern Term term;
-extern Selection sel;
 extern int cmdfd;
 extern pid_t pid;
 extern int oldbutton;
 
 /* config.h globals */
-extern char font[];
-extern int borderpx;
-extern float cwscale;
-extern float chscale;
-extern unsigned int doubleclicktimeout;
-extern unsigned int tripleclicktimeout;
+extern char *shell;
+extern char *utmp;
+extern char *stty_args;
+extern char *vtiden;
+extern char *worddelimiters;
 extern int allowaltscreen;
-// extern unsigned int xfps;
-// extern unsigned int actionfps;
-extern unsigned int cursorthickness;
-// extern int bellvolume;
-extern unsigned int blinktimeout;
-extern char termname[];
-extern const char *colorname[];
-extern size_t colornamelen;
+extern char *termname;
+extern unsigned int tabspaces;
 extern unsigned int defaultfg;
 extern unsigned int defaultbg;
-extern unsigned int defaultcs;
-extern unsigned int defaultrcs;
-extern unsigned int cursorshape;
-extern unsigned int cols;
-extern unsigned int rows;
-extern char mouseshape[];
-extern unsigned int mousefg;
-extern unsigned int mousebg;
-extern unsigned int defaultattr;
-extern MouseShortcut mshortcuts[];
-extern size_t mshortcutslen;
-extern Shortcut shortcuts[];
-extern size_t shortcutslen;
-extern xkb_keysym_t mappedkeys[];
-extern size_t mappedkeyslen;
-extern uint ignoremod;
-extern uint forceselmod;
-extern Key key[];
-extern size_t keyslen;
-extern uint selmasks[];
-extern size_t selmaskslen;
-extern char ascii_printable[];
-
-extern unsigned int keyrepeatdelay;
-extern unsigned int keyrepeatinterval;
-extern Axiskey ashortcuts[];
-extern size_t ashortcutslen;

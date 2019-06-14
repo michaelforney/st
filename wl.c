@@ -30,6 +30,58 @@ static char *argv0;
 
 #define DRAW_BUF_SIZ  20*1024
 
+/* types used in config.h */
+typedef struct {
+    uint mod;
+    xkb_keysym_t keysym;
+    void (*func)(const Arg *);
+    const Arg arg;
+} Shortcut;
+
+typedef struct {
+    uint b;
+    uint mask;
+    char *s;
+} MouseShortcut;
+
+typedef struct {
+    xkb_keysym_t k;
+    uint mask;
+    char *s;
+    /* three valued logic variables: 0 indifferent, 1 on, -1 off */
+    signed char appkey;    /* application keypad */
+    signed char appcursor; /* application cursor */
+    signed char crlf;      /* crlf mode          */
+} Key;
+
+typedef struct {
+    int axis;
+    int dir;
+    uint mask;
+    char s[ESC_BUF_SIZ];
+} Axiskey;
+
+/* Key modifiers */
+#define MOD_MASK_ANY    UINT_MAX
+#define MOD_MASK_NONE   0
+#define MOD_MASK_CTRL   (1<<0)
+#define MOD_MASK_ALT    (1<<1)
+#define MOD_MASK_SHIFT  (1<<2)
+#define MOD_MASK_LOGO   (1<<3)
+
+#define AXIS_VERTICAL   WL_POINTER_AXIS_VERTICAL_SCROLL
+
+/* function definitions used in config.h */
+static void clipcopy(const Arg *);
+static void clippaste(const Arg *);
+static void selpaste(const Arg *);
+static void zoom(const Arg *);
+static void zoomabs(const Arg *);
+static void zoomreset(const Arg *);
+
+/* config.h for applying patches and the configuration. */
+#include "config.h"
+
 typedef struct {
     struct xkb_context *ctx;
     struct xkb_keymap *keymap;
@@ -61,6 +113,13 @@ typedef struct {
 	uint32_t globalserial; /* global event serial */
     bool needdraw;
 } Wayland;
+
+typedef struct {
+    struct wl_data_source *source;
+    char *primary;
+    uint32_t tclick1;
+    uint32_t tclick2;
+} WlSelection;
 
 typedef struct {
     int height;
@@ -116,7 +175,7 @@ static void cresize(int, int);
 static void wlloadfonts(char *, double);
 static void wlunloadfonts(void);
 
-static void getbuttoninfo(void);
+static void mousesel(int);
 static void wlmousereport(int, bool, int, int);
 static void wlmousereportbutton(uint32_t, uint32_t);
 static void wlmousereportmotion(wl_fixed_t, wl_fixed_t);
@@ -131,9 +190,8 @@ static void ptrbutton(void *, struct wl_pointer *, uint32_t, uint32_t,
         uint32_t, uint32_t);
 static void ptraxis(void *, struct wl_pointer *, uint32_t, uint32_t,
         wl_fixed_t);
-static void wlsetsel(char*, uint32_t);
+static void setsel(char*, uint32_t);
 static inline void selwritebuf(char *, int);
-static void selcopy(uint32_t);
 
 /* Keyboard stuff */
 static void kbdkeymap(void *, struct wl_keyboard *, uint32_t, int32_t,
@@ -192,6 +250,8 @@ static void usage(void);
 /* Globals */
 static DC dc;
 static Wayland wl;
+static WlSelection wlsel;
+static TermWindow win;
 static WLD wld;
 static Cursor cursor;
 static Repeat repeat;
@@ -251,6 +311,16 @@ static char *opt_name  = NULL;
 static char *opt_title = NULL;
 
 int
+wlsetcursor(int cursor)
+{
+    DEFAULT(cursor, 1);
+    if (!BETWEEN(cursor, 0, 6))
+        return 1;
+    win.cursor = cursor;
+    return 0;
+}
+
+int
 x2col(int x)
 {
     x -= borderpx;
@@ -281,16 +351,16 @@ kmap(xkb_keysym_t k, uint state)
     int i;
 
     /* Check for mapped keys out of X11 function keys. */
-    for (i = 0; i < mappedkeyslen; i++) {
+    for (i = 0; i < LEN(mappedkeys); i++) {
         if (mappedkeys[i] == k)
             break;
     }
-    if (i == mappedkeyslen) {
+    if (i == LEN(mappedkeys)) {
         if ((k & 0xFFFF) < 0xFD00)
             return NULL;
     }
 
-    for (kp = key; kp < key + keyslen; kp++) {
+    for (kp = key; kp < key + LEN(key); kp++) {
         if (kp->k != k)
             continue;
 
@@ -329,6 +399,7 @@ cresize(int width, int height)
 
     tresize(col, row);
     wlresize(col, row);
+    ttyresize(win.tw, win.th);
 }
 
 void
@@ -346,7 +417,6 @@ zoomabs(const Arg *arg)
     wlunloadfonts();
     wlloadfonts(usedfont, arg->f);
     cresize(0, 0);
-    ttyresize(win.tw, win.th);
     redraw();
 	/* XXX: Should the window size be updated here because wayland doesn't
 	 *   * have a notion of hints?
@@ -364,30 +434,51 @@ zoomreset(const Arg *arg)
 }
 
 void
-setsel(char * buf)
+wlclipcopy(void)
 {
-	wlsetsel(buf, wl.globalserial);
+	clipcopy(NULL);
 }
 
 void
-getbuttoninfo(void)
+clipcopy(const Arg * dummy)
 {
-    int type;
+    // TODO: Implement this!
+}
+
+void
+clippaste(const Arg * dummy)
+{
+    // TODO: Implement this!
+}
+
+void
+selpaste(const Arg * dummy)
+{
+    // TODO: Implement this!
+}
+
+void
+wlsetsel(char * buf)
+{
+	setsel(buf, wl.globalserial);
+}
+
+void
+mousesel(int done)
+{
+    int type, seltype = SEL_REGULAR;
     uint state = wl.xkb.mods & ~forceselmod;
 
-    sel.alt = IS_SET(MODE_ALTSCREEN);
-
-    sel.oe.x = x2col(wl.px);
-    sel.oe.y = y2row(wl.py);
-    selnormalize();
-
-    sel.type = SEL_REGULAR;
-    for (type = 1; type < selmaskslen; ++type) {
+    for (type = 1; type < LEN(selmasks); ++type) {
         if (match(selmasks[type], state)) {
-            sel.type = type;
+            seltype = type;
             break;
         }
     }
+
+    selextend(x2col(wl.px), y2row(wl.py), seltype, done);
+	if (done)
+		setsel(getsel(), wl.globalserial);
 }
 
 void
@@ -412,7 +503,7 @@ wlmousereport(int button, bool release, int x, int y)
         return;
     }
 
-    ttywrite(buf, len);
+    ttywrite(buf, len, 0);
 }
 
 void
@@ -496,8 +587,6 @@ void
 ptrmotion(void *data, struct wl_pointer * pointer, uint32_t serial,
           wl_fixed_t x, wl_fixed_t y)
 {
-    int oldey, oldex, oldsby, oldsey;
-
     if (IS_SET(MODE_MOUSE)) {
         wlmousereportmotion(x, y);
         return;
@@ -506,18 +595,7 @@ ptrmotion(void *data, struct wl_pointer * pointer, uint32_t serial,
     wl.px = wl_fixed_to_int(x);
     wl.py = wl_fixed_to_int(y);
 
-    if (!sel.mode)
-        return;
-
-    sel.mode = SEL_READY;
-    oldey = sel.oe.y;
-    oldex = sel.oe.x;
-    oldsby = sel.nb.y;
-    oldsey = sel.ne.y;
-    getbuttoninfo();
-
-    if (oldey != sel.oe.y || oldex != sel.oe.x)
-        tsetdirt(MIN(sel.nb.y, oldsby), MAX(sel.ne.y, oldsey));
+    mousesel(0);
 }
 
 void
@@ -525,6 +603,7 @@ ptrbutton(void * data, struct wl_pointer * pointer, uint32_t serial,
           uint32_t time, uint32_t button, uint32_t state)
 {
     MouseShortcut *ms;
+	int snap;
 
     if (IS_SET(MODE_MOUSE) && !(wl.xkb.mods & forceselmod)) {
         wlmousereportbutton(button, state);
@@ -535,52 +614,36 @@ ptrbutton(void * data, struct wl_pointer * pointer, uint32_t serial,
     case WL_POINTER_BUTTON_STATE_RELEASED:
         if (button == BTN_MIDDLE) {
             wlselpaste();
-        } else if (button == BTN_LEFT) {
+		} else if (button == BTN_LEFT) {
 			wl.globalserial = serial;
-            if (sel.mode == SEL_READY) {
-                getbuttoninfo();
-                selcopy(serial);
-            } else
-                selclear();
-            sel.mode = SEL_IDLE;
-            tsetdirt(sel.nb.y, sel.ne.y);
-        }
+			mousesel(1);
+		}
         break;
 
     case WL_POINTER_BUTTON_STATE_PRESSED:
-        for (ms = mshortcuts; ms < mshortcuts + mshortcutslen; ms++) {
+        for (ms = mshortcuts; ms < mshortcuts + LEN(mshortcuts); ms++) {
             if (button == ms->b && match(ms->mask, wl.xkb.mods)) {
-                ttysend(ms->s, strlen(ms->s));
+                ttywrite(ms->s, strlen(ms->s), 1);
                 return;
             }
         }
 
         if (button == BTN_LEFT) {
-            /* Clear previous selection, logically and visually. */
-            selclear();
-            sel.mode = SEL_EMPTY;
-            sel.type = SEL_REGULAR;
-            sel.oe.x = sel.ob.x = x2col(wl.px);
-            sel.oe.y = sel.ob.y = y2row(wl.py);
-
             /*
              * If the user clicks below predefined timeouts
              * specific snapping behaviour is exposed.
              */
-            if (time - sel.tclick2 <= tripleclicktimeout) {
-                sel.snap = SNAP_LINE;
-            } else if (time - sel.tclick1 <= doubleclicktimeout) {
-                sel.snap = SNAP_WORD;
+            if (time - wlsel.tclick2 <= tripleclicktimeout) {
+                snap = SNAP_LINE;
+            } else if (time - wlsel.tclick1 <= doubleclicktimeout) {
+                snap = SNAP_WORD;
             } else {
-                sel.snap = 0;
+                snap = 0;
             }
-            selnormalize();
+            wlsel.tclick2 = wlsel.tclick1;
+            wlsel.tclick1 = time;
 
-            if (sel.snap != 0)
-                sel.mode = SEL_READY;
-            tsetdirt(sel.nb.y, sel.ne.y);
-            sel.tclick2 = sel.tclick1;
-            sel.tclick1 = time;
+			selstart(x2col(wl.px), y2row(wl.py), snap);
         }
         break;
     }
@@ -598,29 +661,29 @@ ptraxis(void * data, struct wl_pointer * pointer, uint32_t time, uint32_t axis,
         return;
     }
 
-    for (ak = ashortcuts; ak < ashortcuts + ashortcutslen; ak++) {
+    for (ak = ashortcuts; ak < ashortcuts + LEN(ashortcuts); ak++) {
         if (axis == ak->axis && dir == ak->dir
                 && match(ak->mask, wl.xkb.mods)) {
-            ttysend(ak->s, strlen(ak->s));
+            ttywrite(ak->s, strlen(ak->s), 1);
             return;
         }
     }
 }
 
 void
-wlsetsel(char *str, uint32_t serial)
+setsel(char *str, uint32_t serial)
 {
-    free(sel.primary);
-    sel.primary = str;
+    free(wlsel.primary);
+    wlsel.primary = str;
 
     if (str) {
-        sel.source = wl_data_device_manager_create_data_source(wl.datadevmanager);
-        wl_data_source_add_listener(sel.source, &datasrclistener, NULL);
-        wl_data_source_offer(sel.source, "text/plain; charset=utf-8");
+        wlsel.source = wl_data_device_manager_create_data_source(wl.datadevmanager);
+        wl_data_source_add_listener(wlsel.source, &datasrclistener, NULL);
+        wl_data_source_offer(wlsel.source, "text/plain; charset=utf-8");
     } else {
-        sel.source = NULL;
+        wlsel.source = NULL;
     }
-    wl_data_device_set_selection(wl.datadev, sel.source, serial);
+    wl_data_device_set_selection(wl.datadev, wlsel.source, serial);
 }
 
 void
@@ -639,7 +702,7 @@ selwritebuf(char *buf, int len)
         *repl++ = '\r';
     }
 
-    ttysend(buf, len);
+    ttywrite(buf, len, 1);
 }
 
 void
@@ -650,11 +713,11 @@ wlselpaste(void)
 
     if (wl.seloffer) {
         if (IS_SET(MODE_BRCKTPASTE))
-            ttywrite("\033[200~", 6);
+            ttywrite("\033[200~", 6, 0);
         /* check if we are pasting from ourselves */
-        if (sel.source) {
-            str = sel.primary;
-            left = strlen(sel.primary);
+        if (wlsel.source) {
+            str = wlsel.primary;
+            left = strlen(wlsel.primary);
             while (left > 0) {
                 len = MIN(sizeof buf, left);
                 memcpy(buf, str, len);
@@ -673,14 +736,8 @@ wlselpaste(void)
             close(fds[0]);
         }
         if (IS_SET(MODE_BRCKTPASTE))
-            ttywrite("\033[201~", 6);
+            ttywrite("\033[201~", 6, 0);
     }
-}
-
-void
-selcopy(uint32_t serial)
-{
-    wlsetsel(getsel(), serial);
 }
 
 void
@@ -721,7 +778,7 @@ kbdenter(void *data, struct wl_keyboard *keyboard, uint32_t serial,
 {
     win.state |= WIN_FOCUSED;
     if (IS_SET(MODE_FOCUS))
-        ttywrite("\033[I", 3);
+        ttywrite("\033[I", 3, 0);
     /* need to redraw the cursor */
     wlneeddraw();
 }
@@ -734,7 +791,7 @@ kbdleave(void *data, struct wl_keyboard *keyboard, uint32_t serial,
     wl.seloffer = NULL;
     win.state &= ~WIN_FOCUSED;
     if (IS_SET(MODE_FOCUS))
-        ttywrite("\033[O", 3);
+        ttywrite("\033[O", 3, 0);
     /* need to redraw the cursor */
     wlneeddraw();
     /* disable key repeat */
@@ -767,7 +824,7 @@ kbdkey(void *data, struct wl_keyboard *keyboard, uint32_t serial, uint32_t time,
         --len;
 
     /* 1. shortcuts */
-    for (bp = shortcuts; bp < shortcuts + shortcutslen; bp++) {
+    for (bp = shortcuts; bp < shortcuts + LEN(shortcuts); bp++) {
         if (ksym == bp->keysym && match(bp->mod, wl.xkb.mods)) {
             bp->func(&(bp->arg));
             return;
@@ -814,7 +871,7 @@ send:
     repeat.len = len;
     repeat.started = false;
     clock_gettime(CLOCK_MONOTONIC, &repeat.last);
-    ttysend(str, len);
+    ttywrite(str, len, 1);
 }
 
 void
@@ -906,9 +963,7 @@ xdgtoplevelconfigure(void *data, struct xdg_toplevel *toplevel,
     if (w == win.w && h == win.h)
         return;
     cresize(w, h);
-    if (wl.configured)
-        ttyresize(win.tw, win.th);
-    else
+    if (!wl.configured)
         wl.configured = true;
 }
 
@@ -957,7 +1012,7 @@ wlloadcols(void)
 {
     int i;
 
-    dc.collen = MAX(colornamelen, 256);
+    dc.collen = MAX(LEN(colorname), 256);
     dc.col = xmalloc(dc.collen * sizeof(uint32_t));
 
     for (i = 0; i < dc.collen; i++)
@@ -1197,7 +1252,6 @@ drawregion(int x1, int y1, int x2, int y2)
     int ic, ib, x, y, ox;
     Glyph base, new;
     char buf[DRAW_BUF_SIZ];
-    int ena_sel = sel.ob.x != -1 && sel.alt == IS_SET(MODE_ALTSCREEN);
 
     for (y = y1; y < y2; y++) {
         if (!term.dirty[y])
@@ -1210,7 +1264,7 @@ drawregion(int x1, int y1, int x2, int y2)
             new = term.line[y][x];
             if (new.mode == ATTR_WDUMMY)
                 continue;
-            if (ena_sel && selected(x, y))
+            if (selected(x, y))
                 new.mode ^= ATTR_REVERSE;
             if (ib > 0 && (ATTRCMP(base, new)
                     || ib >= DRAW_BUF_SIZ-UTF_SIZ)) {
@@ -1514,7 +1568,6 @@ wldrawcursor(void)
     static int oldx = 0, oldy = 0;
     int curx;
     Glyph g = {' ', ATTR_NULL, defaultbg, defaultcs}, og;
-    int ena_sel = sel.ob.x != -1 && sel.alt == IS_SET(MODE_ALTSCREEN);
     uint32_t drawcol;
 
     LIMIT(oldx, 0, term.col-1);
@@ -1530,7 +1583,7 @@ wldrawcursor(void)
 
     /* remove the old cursor */
     og = term.line[oldy][oldx];
-    if (ena_sel && selected(oldx, oldy))
+    if (selected(oldx, oldy))
         og.mode ^= ATTR_REVERSE;
     wldrawglyph(og, oldx, oldy);
     if (oldx != curx || oldy != term.c.y) {
@@ -1546,7 +1599,7 @@ wldrawcursor(void)
     if (IS_SET(MODE_REVERSE)) {
         g.mode |= ATTR_REVERSE;
         g.bg = defaultfg;
-        if (ena_sel && selected(term.c.x, term.c.y)) {
+        if (selected(term.c.x, term.c.y)) {
             drawcol = dc.col[defaultcs];
             g.fg = defaultrcs;
         } else {
@@ -1554,7 +1607,7 @@ wldrawcursor(void)
             g.fg = defaultcs;
         }
     } else {
-        if (ena_sel && selected(term.c.x, term.c.y)) {
+        if (selected(term.c.x, term.c.y)) {
             drawcol = dc.col[defaultrcs];
             g.fg = defaultfg;
             g.bg = defaultrcs;
@@ -1700,8 +1753,8 @@ void
 datasrcsend(void *data, struct wl_data_source *source, const char *mimetype,
                     int32_t fd)
 {
-        char *buf = sel.primary;
-            int len = strlen(sel.primary);
+        char *buf = wlsel.primary;
+            int len = strlen(wlsel.primary);
                 ssize_t ret;
                     while ((ret = write(fd, buf, MIN(len, BUFSIZ))) > 0) {
                                 len -= ret;
@@ -1713,8 +1766,8 @@ datasrcsend(void *data, struct wl_data_source *source, const char *mimetype,
 void
 datasrccancelled(void *data, struct wl_data_source *source)
 {
-        if (sel.source == source) {
-                    sel.source = NULL;
+        if (wlsel.source == source) {
+                    wlsel.source = NULL;
                             selclear();
                                 }
             wl_data_source_destroy(source);
@@ -1781,6 +1834,11 @@ wlinit(void)
 
     wl.xkb.ctx = xkb_context_new(0);
     resettitle();
+
+    wlsel.tclick1 = 0;
+    wlsel.tclick2 = 0;
+	wlsel.primary = NULL;
+    wlsel.source = NULL;
 }
 
 void
@@ -1793,10 +1851,8 @@ run(void)
 
     /* Look for initial configure. */
     wl_display_roundtrip(wl.dpy);
-    if (!wl.configured)
-        cresize(win.w, win.h);
     ttynew(opt_line, opt_io, opt_cmd);
-    ttyresize(win.tw, win.th);
+    cresize(win.w, win.h);
     draw();
 
     clock_gettime(CLOCK_MONOTONIC, &last);
@@ -1846,7 +1902,7 @@ run(void)
                     keyrepeatdelay)) {
                 repeat.started = true;
                 repeat.last = now;
-                ttysend(repeat.str, repeat.len);
+                ttywrite(repeat.str, repeat.len, 1);
             } else {
                 msecs = MIN(msecs, (repeat.started ? \
                     keyrepeatinterval : keyrepeatdelay) - \

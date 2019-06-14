@@ -21,17 +21,7 @@
 #include <time.h>
 #include <unistd.h>
 #include <libgen.h>
-#include <fontconfig/fontconfig.h>
 #include <wchar.h>
-/* for BTN_* definitions */
-#include <linux/input.h>
-#include <sys/mman.h>
-#include <xkbcommon/xkbcommon.h>
-#include <stdbool.h>
-
-/* Wayland */
-#include <wayland-client.h>
-
 
 #include "st.h"
 #include "win.h"
@@ -114,19 +104,6 @@ typedef struct {
 	int narg;              /* nb of args */
 } STREscape;
 
-/* function definitions used in config.h */
-static void clipcopy(const Arg *);
-static void clippaste(const Arg *);
-static void numlock(const Arg *);
-static void selpaste(const Arg *);
-static void printsel(const Arg *);
-static void printscreen(const Arg *) ;
-static void iso14755(const Arg *);
-static void toggleprinter(const Arg *);
-static void sendbreak(const Arg *);
-
-/* config.h for applying patches and the configuration. */
-#include "config.h"
 
 static void execsh(char **);
 static void stty(char **);
@@ -163,6 +140,7 @@ static void tscrollup(int, int);
 static void tscrolldown(int, int);
 static void tsetattr(int *, int);
 static void tsetchar(Rune, Glyph *, int, int);
+static void tsetdirt(int, int);
 static void tsetscroll(int, int);
 static void tswapscreen(void);
 static void tsetmode(int, int, int *, int);
@@ -188,13 +166,12 @@ static char *base64dec(const char *);
 static ssize_t xwrite(int, const char *, size_t);
 
 /* Globals */
-TermWindow win;
 Term term;
-Selection sel;
 int cmdfd;
 pid_t pid;
 int oldbutton   = 3; /* button event on startup: 3 = release */
 
+static Selection sel;
 static CSIEscape csiescseq;
 static STREscape strescseq;
 static int iofd = 1;
@@ -203,15 +180,6 @@ static uchar utfbyte[UTF_SIZ + 1] = {0x80,    0, 0xC0, 0xE0, 0xF0};
 static uchar utfmask[UTF_SIZ + 1] = {0xC0, 0x80, 0xE0, 0xF0, 0xF8};
 static Rune utfmin[UTF_SIZ + 1] = {       0,    0,  0x80,  0x800,  0x10000};
 static Rune utfmax[UTF_SIZ + 1] = {0x10FFFF, 0x7F, 0x7FF, 0xFFFF, 0x10FFFF};
-
-/* config.h array lengths */
-size_t colornamelen = LEN(colorname);
-size_t mshortcutslen = LEN(mshortcuts);
-size_t shortcutslen = LEN(shortcuts);
-size_t selmaskslen = LEN(selmasks);
-size_t keyslen = LEN(key);
-size_t mappedkeyslen = LEN(mappedkeys);
-size_t ashortcutslen = LEN(ashortcuts);
 
 ssize_t
 xwrite(int fd, const char *s, size_t len)
@@ -398,13 +366,9 @@ base64dec(const char *src)
 void
 selinit(void)
 {
-    sel.tclick1 = 0;
-    sel.tclick2 = 0;
 	sel.mode = SEL_IDLE;
 	sel.snap = 0;
 	sel.ob.x = -1;
-	sel.primary = NULL;
-	sel.source = NULL;
 }
 
 int
@@ -419,6 +383,52 @@ tlinelen(int y)
 		--i;
 
 	return i;
+}
+
+void
+selstart(int col, int row, int snap)
+{
+	selclear();
+	sel.mode = SEL_EMPTY;
+	sel.type = SEL_REGULAR;
+	sel.snap = snap;
+	sel.oe.x = sel.ob.x = col;
+	sel.oe.y = sel.ob.y = row;
+	selnormalize();
+
+	if (sel.snap != 0)
+		sel.mode = SEL_READY;
+	tsetdirt(sel.nb.y, sel.ne.y);
+}
+
+void
+selextend(int col, int row, int type, int done)
+{
+	int oldey, oldex, oldsby, oldsey, oldtype;
+
+	if (!sel.mode)
+		return;
+	if (done && sel.mode == SEL_EMPTY) {
+		selclear();
+		return;
+	}
+
+	oldey = sel.oe.y;
+	oldex = sel.oe.x;
+	oldsby = sel.nb.y;
+	oldsey = sel.ne.y;
+	oldtype = sel.type;
+
+	sel.alt = IS_SET(MODE_ALTSCREEN);
+	sel.oe.x = col;
+	sel.oe.y = row;
+	selnormalize();
+	sel.type = type;
+
+	if (oldey != sel.oe.y || oldex != sel.oe.x || oldtype != sel.type)
+		tsetdirt(MIN(sel.nb.y, oldsby), MAX(sel.ne.y, oldsey));
+
+	sel.mode = done ? SEL_IDLE : SEL_READY;
 }
 
 void
@@ -452,7 +462,8 @@ selnormalize(void)
 int
 selected(int x, int y)
 {
-	if (sel.mode == SEL_EMPTY)
+	if (sel.mode == SEL_EMPTY || sel.ob.x == -1 ||
+			sel.alt != IS_SET(MODE_ALTSCREEN))
 		return 0;
 
 	if (sel.type == SEL_RECTANGULAR)
@@ -592,24 +603,6 @@ getsel(void)
 }
 
 void
-selpaste(const Arg *dummy)
-{
-    wlselpaste();
-}
-
-void
-clipcopy(const Arg *dummy)
-{
-    // TODO: Check what xclipcopy() does
-}
-
-void
-clippaste(const Arg *dummy)
-{
-    // TODO: Check what xclippaste() does
-}
-
-void
 selclear(void)
 {
 	if (sel.ob.x == -1)
@@ -721,7 +714,6 @@ void
 ttynew(char *line, char *out, char **args)
 {
 	int m, s;
-	struct winsize w = {term.row, term.col, 0, 0};
 
 	if (out) {
 		term.mode |= MODE_PRINT;
@@ -742,7 +734,7 @@ ttynew(char *line, char *out, char **args)
 	}
 
 	/* seems to work fine on linux, openbsd and freebsd */
-	if (openpty(&m, &s, NULL, NULL, &w) < 0)
+	if (openpty(&m, &s, NULL, NULL, NULL) < 0)
 		die("openpty failed: %s\n", strerror(errno));
 
 	switch (pid = fork()) {
@@ -793,11 +785,14 @@ ttyread(void)
 }
 
 void
-ttywrite(const char *s, size_t n)
+ttywrite(const char *s, size_t n, int may_echo)
 {
 	fd_set wfd, rfd;
 	ssize_t r;
 	size_t lim = 256;
+
+	if (may_echo && IS_SET(MODE_ECHO))
+		twrite(s, n, 1);
 
 	/*
 	 * Remember that we are using a pty, which might be a modem line.
@@ -847,14 +842,6 @@ ttywrite(const char *s, size_t n)
 
 write_error:
 	die("write error on tty: %s\n", strerror(errno));
-}
-
-void
-ttysend(char *s, size_t n)
-{
-	ttywrite(s, n);
-	if (IS_SET(MODE_ECHO))
-		twrite(s, n, 1);
 }
 
 void
@@ -1581,7 +1568,7 @@ csihandle(void)
 		break;
 	case 'c': /* DA -- Device Attributes */
 		if (csiescseq.arg[0] == 0)
-			ttywrite(vtiden, sizeof(vtiden) - 1);
+			ttywrite(vtiden, strlen(vtiden), 0);
 		break;
 	case 'C': /* CUF -- Cursor <n> Forward */
 	case 'a': /* HPR -- Cursor <n> Forward */
@@ -1709,7 +1696,7 @@ csihandle(void)
 		if (csiescseq.arg[0] == 6) {
 			len = snprintf(buf, sizeof(buf),"\033[%i;%iR",
 					term.c.y+1, term.c.x+1);
-			ttywrite(buf, len);
+			ttywrite(buf, len, 0);
 		}
 		break;
 	case 'r': /* DECSTBM -- Set Scrolling Region */
@@ -1731,11 +1718,8 @@ csihandle(void)
 	case ' ':
 		switch (csiescseq.mode[1]) {
 		case 'q': /* DECSCUSR -- Set Cursor Style */
-			DEFAULT(csiescseq.arg[0], 1);
-			if (!BETWEEN(csiescseq.arg[0], 0, 6)) {
+			if (wlsetcursor(csiescseq.arg[0]))
 				goto unknown;
-			}
-			win.cursor = csiescseq.arg[0];
 			break;
 		default:
 			goto unknown;
@@ -1799,8 +1783,8 @@ strhandle(void)
 
 				dec = base64dec(strescseq.args[2]);
 				if (dec) {
-					setsel(dec);
-					clipcopy(NULL);
+                    wlsetsel(dec);
+                    wlclipcopy();
 				} else {
 					fprintf(stderr, "erresc: invalid base64\n");
 				}
@@ -1930,7 +1914,7 @@ iso14755(const Arg *arg)
 	    (*e != '\n' && *e != '\0'))
 		return;
 
-	ttysend(uc, utf8encode(utf32, uc));
+	ttywrite(uc, utf8encode(utf32, uc), 1);
 }
 
 void
@@ -2144,7 +2128,7 @@ tcontrolcode(uchar ascii)
 	case 0x99:   /* TODO: SGCI */
 		break;
 	case 0x9a:   /* DECID -- Identify Terminal */
-		ttywrite(vtiden, sizeof(vtiden) - 1);
+		ttywrite(vtiden, strlen(vtiden), 0);
 		break;
 	case 0x9b:   /* TODO: CSI */
 	case 0x9c:   /* TODO: ST */
@@ -2216,7 +2200,7 @@ eschandle(uchar ascii)
 		}
 		break;
 	case 'Z': /* DECID -- Identify Terminal */
-		ttywrite(vtiden, sizeof(vtiden) - 1);
+		ttywrite(vtiden, strlen(vtiden), 0);
 		break;
 	case 'c': /* RIS -- Reset to inital state */
 		treset();

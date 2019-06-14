@@ -5,8 +5,8 @@
  *
  * font: see http://freedesktop.org/software/fontconfig/fontconfig-user.html
  */
-char font[] = "Liberation Mono:pixelsize=12:antialias=true:autohint=true";
-int borderpx = 2;
+static char font[] = "Liberation Mono:pixelsize=12:antialias=true:autohint=true";
+static int borderpx = 2;
 
 /*
  * What program is execed by st-wl depends of these precedence rules:
@@ -16,45 +16,45 @@ int borderpx = 2;
  * 4: value of shell in /etc/passwd
  * 5: value of shell in config.h
  */
-static char shell[] = "/bin/sh";
-static char *utmp = NULL;
-static char stty_args[] = "stty raw pass8 nl -echo -iexten -cstopb 38400";
+char *shell = "/bin/sh";
+char *utmp = NULL;
+char *stty_args = "stty raw pass8 nl -echo -iexten -cstopb 38400";
 
 /* identification sequence returned in DA and DECID */
-static char vtiden[] = "\033[?6c";
+char *vtiden = "\033[?6c";
 
 /* Kerning / character bounding-box multipliers */
-float cwscale = 1.0;
-float chscale = 1.0;
+static float cwscale = 1.0;
+static float chscale = 1.0;
 
 /*
  * word delimiter string
  *
  * More advanced example: " `'\"()[]{}"
  */
-static char worddelimiters[] = " ";
+char *worddelimiters = " ";
 
 /* selection timeouts (in milliseconds) */
-unsigned int doubleclicktimeout = 300;
-unsigned int tripleclicktimeout = 600;
+static unsigned int doubleclicktimeout = 300;
+static unsigned int tripleclicktimeout = 600;
 
 /* alt screens */
 int allowaltscreen = 1;
 
 /* key repeat timeouts (in milliseconds) */
-unsigned int keyrepeatdelay = 500;
-unsigned int keyrepeatinterval = 25;
+static unsigned int keyrepeatdelay = 500;
+static unsigned int keyrepeatinterval = 25;
 
 /*
  * blinking timeout (set to 0 to disable blinking) for the terminal blinking
  * attribute.
  */
-unsigned int blinktimeout = 800;
+static unsigned int blinktimeout = 800;
 
 /*
  * thickness of underline and bar cursors
  */
-unsigned int cursorthickness = 2;
+static unsigned int cursorthickness = 2;
 
 /*
  * bell volume. It must be a value between -100 and 100. Use 0 for disabling
@@ -65,7 +65,7 @@ unsigned int cursorthickness = 2;
  */
 
 /* default TERM value */
-char termname[] = "st-wl-256color";
+char *termname = "st-wl-256color";
 
 /*
  * spaces per tab
@@ -82,10 +82,10 @@ char termname[] = "st-wl-256color";
  *
  *	stty tabs
  */
-static unsigned int tabspaces = 8;
+unsigned int tabspaces = 8;
 
 /* Terminal colors (16 first used in escape sequence) */
-const char *colorname[] = {
+static const char *colorname[] = {
 	/* 8 normal colors */
 	"black",
 	"red3",
@@ -120,8 +120,8 @@ const char *colorname[] = {
  */
 unsigned int defaultfg = 7;
 unsigned int defaultbg = 0;
-unsigned int defaultcs = 256;
-unsigned int defaultrcs = 257;
+static unsigned int defaultcs = 256;
+static unsigned int defaultrcs = 257;
 
 /*
  * Default shape of cursor
@@ -130,36 +130,36 @@ unsigned int defaultrcs = 257;
  * 6: Bar ("|")
  * 7: Snowman ("☃")
  */
-unsigned int cursorshape = 2;
+static unsigned int cursorshape = 2;
 
 /*
  * Default columns and rows numbers
  */
 
-unsigned int cols = 80;
-unsigned int rows = 24;
+static unsigned int cols = 80;
+static unsigned int rows = 24;
 
 /*
  * Default shape of the mouse cursor
  */
-char mouseshape[] = "xterm";
+static char mouseshape[] = "xterm";
 
 /*
  * Color used to display font attributes when fontconfig selected a font which
  * doesn't match the ones requested.
  */
-unsigned int defaultattr = 11;
+static unsigned int defaultattr = 11;
 
 /*
  * Internal mouse shortcuts.
  * Beware that overloading Button1 will disable the selection.
  */
-MouseShortcut mshortcuts[] = {
+static MouseShortcut mshortcuts[] = {
 	/* button               mask            string */
 	{ -1,                   MOD_MASK_NONE,  "" }
 };
 
-Axiskey ashortcuts[] = {
+static Axiskey ashortcuts[] = {
 	/* axis		    direction	mask		string */
 	{ AXIS_VERTICAL,    +1,		MOD_MASK_ANY,	"\031"},
 	{ AXIS_VERTICAL,    -1,		MOD_MASK_ANY,	"\005"},
@@ -169,7 +169,7 @@ Axiskey ashortcuts[] = {
 #define MODKEY MOD_MASK_ALT
 #define TERMMOD (MOD_MASK_CTRL|MOD_MASK_SHIFT)
 
-Shortcut shortcuts[] = {
+static Shortcut shortcuts[] = {
 	/* modifier        key                function        argument */
 	{ MOD_MASK_ANY,    XKB_KEY_Break,     sendbreak,      {.i =  0} },
 	{ MOD_MASK_CTRL,   XKB_KEY_Print,     toggleprinter,  {.i =  0} },
@@ -214,23 +214,23 @@ Shortcut shortcuts[] = {
  * If you want keys other than the X11 function keys (0xFD00 - 0xFFFF)
  * to be mapped below, add them to this array.
  */
-xkb_keysym_t mappedkeys[] = { -1 };
+static xkb_keysym_t mappedkeys[] = { -1 };
 
 /* State bits to ignore when matching key or button events. */
-uint ignoremod = 0;
+static uint ignoremod = 0;
 
 /*
  * Override mouse-select while mask is active (when MODE_MOUSE is set).
  * Note that if you want to use MOD_MASK_SHIFT with selmasks, set this to an
  * other modifier, set to 0 to not use it.
  */
-uint forceselmod = MOD_MASK_SHIFT;
+static uint forceselmod = MOD_MASK_SHIFT;
 
 /*
  * This is the huge key array which defines all compatibility to the Linux
  * world. Please decide about changes wisely.
  */
-Key key[] = {
+static Key key[] = {
 	/* keysym                mask             string      appkey appcursor crlf */
 	{ XKB_KEY_KP_Home,       MOD_MASK_SHIFT,  "\033[2J",       0,   -1,    0},
 	{ XKB_KEY_KP_Home,       MOD_MASK_SHIFT,  "\033[1;2H",     0,   +1,    0},
@@ -450,7 +450,7 @@ Key key[] = {
  * ButtonRelease and MotionNotify.
  * If no match is found, regular selection is used.
  */
-uint selmasks[] = {
+static uint selmasks[] = {
 	[SEL_RECTANGULAR] = MOD_MASK_ALT,
 };
 
@@ -458,7 +458,7 @@ uint selmasks[] = {
  * Printable characters in ASCII, used to estimate the advance width
  * of single wide characters.
  */
-char ascii_printable[] =
+static char ascii_printable[] =
 	" !\"#$%&'()*+,-./0123456789:;<=>?"
 	"@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_"
 	"`abcdefghijklmnopqrstuvwxyz{|}~";
