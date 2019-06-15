@@ -11,6 +11,8 @@ PKG_CONFIG = pkg-config
 PKGCFG = fontconfig wayland-client wayland-cursor xkbcommon wld
 XDG_SHELL_PROTO = `$(PKG_CONFIG) --variable=pkgdatadir wayland-protocols`/stable/xdg-shell/xdg-shell.xml
 
+PKG_CONFIG = pkg-config
+
 # includes and libs
 INCS = -I. -I/usr/include `$(PKG_CONFIG) --cflags ${PKGCFG}`
 LIBS = -L/usr/lib -lc -lm -lrt -lutil `$(PKG_CONFIG) --libs ${PKGCFG}`
