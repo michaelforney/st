@@ -1,5 +1,6 @@
 /* See LICENSE for license details. */
 #include <errno.h>
+#include <math.h>
 #include <limits.h>
 #include <locale.h>
 #include <signal.h>
@@ -304,8 +305,9 @@ typedef struct {
 } Fontcache;
 
 /* Fontcache is an array now. A new font will be appended to the array. */
-static Fontcache frc[16];
+static Fontcache *frc = NULL;
 static int frclen = 0;
+static int frccap = 0;
 static char *usedfont = NULL;
 static double usedfontsize = 0;
 static double defaultfontsize = 0;
@@ -429,6 +431,8 @@ cresize(int width, int height)
 
     col = (win.w - 2 * borderpx) / win.cw;
     row = (win.h - 2 * borderpx) / win.ch;
+    col = MAX(1, col);
+    row = MAX(1, row);
 
     tresize(col, row);
     wlresize(col, row);
@@ -706,6 +710,9 @@ ptraxis(void * data, struct wl_pointer * pointer, uint32_t time, uint32_t axis,
 void
 setsel(char *str, uint32_t serial)
 {
+    if (!str)
+        return;
+
     free(wlsel.primary);
     wlsel.primary = str;
 
@@ -941,8 +948,8 @@ wlresize(int col, int row)
 {
     union wld_object object;
 
-    win.tw = MAX(1, col * win.cw);
-    win.th = MAX(1, row * win.ch);
+    win.tw = col * win.cw;
+    win.th = row * win.ch;
 
     wld.oldbuffer = wld.buffer;
     wld.buffer = wld_create_buffer(wld.ctx, win.w, win.h,
@@ -954,7 +961,7 @@ wlresize(int col, int row)
 void
 xsettitle(char *title)
 {
-	DEFAULT(title, "st-wl");
+	DEFAULT(title, opt_title);
     xdg_toplevel_set_title(wl.xdgtoplevel, title);
 }
 
@@ -1045,9 +1052,12 @@ void
 xloadcols(void)
 {
     int i;
+    static int loaded;
 
-    dc.collen = MAX(LEN(colorname), 256);
-    dc.col = xmalloc(dc.collen * sizeof(uint32_t));
+    if(!loaded) {
+        dc.collen = MAX(LEN(colorname), 256);
+        dc.col = xmalloc(dc.collen * sizeof(uint32_t));
+    }
 
     for (i = 0; i < dc.collen; i++)
         if (!wlloadcolor(i, NULL, &dc.col[i])) {
@@ -1056,6 +1066,8 @@ xloadcols(void)
             else
                 die("Could not allocate color %d\n", i);
         }
+
+    loaded = 1;
 }
 
 int
@@ -1117,7 +1129,7 @@ wlloadfont(Font *f, FcPattern *pattern)
         if ((FcPatternGetInteger(match, "slant", 0,
             &haveattr) != FcResultMatch) || haveattr < wantattr) {
             f->badslant = 1;
-            fputs("st-wl: font slant does not match\n", stderr);
+            fputs("font slant does not match\n", stderr);
         }
     }
 
@@ -1126,7 +1138,7 @@ wlloadfont(Font *f, FcPattern *pattern)
         if ((FcPatternGetInteger(match, "weight", 0,
             &haveattr) != FcResultMatch) || haveattr != wantattr) {
             f->badweight = 1;
-            fputs("st-wl: font weight does not match\n", stderr);
+            fputs("font weight does not match\n", stderr);
         }
     }
 
@@ -1152,7 +1164,6 @@ wlloadfonts(char *fontstr, double fontsize)
 {
     FcPattern *pattern;
     double fontval;
-    float ceilf(float);
 
     if (fontstr[0] == '-') {
         /* XXX: need XftXlfdParse equivalent */
@@ -1162,7 +1173,7 @@ wlloadfonts(char *fontstr, double fontsize)
     }
 
     if (!pattern)
-        die("st-wl: can't open font %s\n", fontstr);
+        die("can't open font %s\n", fontstr);
 
     if (fontsize > 1) {
         FcPatternDel(pattern, FC_PIXEL_SIZE);
@@ -1191,7 +1202,7 @@ wlloadfonts(char *fontstr, double fontsize)
     FcDefaultSubstitute(pattern);
 
     if (wlloadfont(&dc.font, pattern))
-        die("st-wl: can't open font %s\n", fontstr);
+        die("can't open font %s\n", fontstr);
 
     if (usedfontsize < 0) {
         FcPatternGetDouble(dc.font.pattern,
@@ -1208,17 +1219,17 @@ wlloadfonts(char *fontstr, double fontsize)
     FcPatternDel(pattern, FC_SLANT);
     FcPatternAddInteger(pattern, FC_SLANT, FC_SLANT_ITALIC);
     if (wlloadfont(&dc.ifont, pattern))
-        die("st-wl: can't open font %s\n", fontstr);
+        die("can't open font %s\n", fontstr);
 
     FcPatternDel(pattern, FC_WEIGHT);
     FcPatternAddInteger(pattern, FC_WEIGHT, FC_WEIGHT_BOLD);
     if (wlloadfont(&dc.ibfont, pattern))
-        die("st-wl: can't open font %s\n", fontstr);
+        die("can't open font %s\n", fontstr);
 
     FcPatternDel(pattern, FC_SLANT);
     FcPatternAddInteger(pattern, FC_SLANT, FC_SLANT_ROMAN);
     if (wlloadfont(&dc.bfont, pattern))
-        die("st-wl: can't open font %s\n", fontstr);
+        die("can't open font %s\n", fontstr);
 
     FcPatternDestroy(pattern);
 }
@@ -1527,10 +1538,12 @@ wldraws(char *s, Glyph base, int x, int y, int charlen, int bytelen)
             /*
              * Overwrite or create the new cache entry.
              */
-            if (frclen >= LEN(frc)) {
-                frclen = LEN(frc) - 1;
-                wld_font_close(frc[frclen].font);
-                frc[frclen].unicodep = 0;
+            if (frclen >= frccap) {
+                frccap += 16;
+                frc = xrealloc(frc, frccap * sizeof(Fontcache));
+                // frclen = LEN(frc) - 1;
+                // wld_font_close(frc[frclen].font);
+                // frc[frclen].unicodep = 0;
             }
 
             frc[frclen].font = wld_font_open_pattern(wld.fontctx,
@@ -1990,19 +2003,19 @@ main(int argc, char *argv[])
         opt_embed = EARGF(usage());
         break;
     case 'v':
-        die("%s " VERSION " (c) 2010-2016 st-wl engineers\n", argv0);
+        die("%s " VERSION "\n", argv0);
         break;
     default:
         usage();
     } ARGEND;
 
 run:
-    if (argc > 0) {
-        /* eat all remaining arguments */
+    if (argc > 0) /* eat all remaining arguments */
         opt_cmd = argv;
-        if (!opt_title && !opt_line)
-            opt_title = basename(xstrdup(argv[0]));
-    }
+
+    if (!opt_title)
+        opt_title = (opt_line || !opt_cmd) ? "st" : opt_cmd[0];
+
     setlocale(LC_CTYPE, "");
     cols = MAX(cols, 1);
     rows = MAX(rows, 1);
