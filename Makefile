@@ -29,8 +29,8 @@ xdg-shell-client-protocol.h:
 .c.o:
 	$(CC) $(STCFLAGS) -c $<
 
-st.o: config.h st.h win.h
-wl.o: arg.h config.h st.h win.h xdg-shell-client-protocol.h
+st.o: st.h win.h
+wl.o: arg.h st.h win.h config.h xdg-shell-client-protocol.h
 
 $(OBJ): config.h config.mk
 
@@ -48,7 +48,7 @@ dist: clean
 	tar -cf - st-wl-$(VERSION) | gzip > st-wl-$(VERSION).tar.gz
 	rm -rf st-wl-$(VERSION)
 
-install: st
+install: st-wl
 	mkdir -p $(DESTDIR)$(PREFIX)/bin
 	cp -f st-wl $(DESTDIR)$(PREFIX)/bin
 	chmod 755 $(DESTDIR)$(PREFIX)/bin/st-wl

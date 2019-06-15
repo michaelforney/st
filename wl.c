@@ -122,7 +122,6 @@ typedef struct {
     XKB xkb;
     bool configured;
     int px, py; /* pointer x and y */
-    int vis;
     struct wl_callback * framecb;
 	uint32_t globalserial; /* global event serial */
     bool needdraw;
@@ -968,7 +967,6 @@ xsettitle(char *title)
 void
 surfenter(void *data, struct wl_surface *surface, struct wl_output *output)
 {
-    wl.vis++;
     if (!(IS_SET(MODE_VISIBLE)))
         win.mode |= MODE_VISIBLE;
 }
@@ -976,7 +974,7 @@ surfenter(void *data, struct wl_surface *surface, struct wl_output *output)
 void
 surfleave(void *data, struct wl_surface *surface, struct wl_output *output)
 {
-    if (--wl.vis == 0)
+    if(IS_SET(MODE_VISIBLE))
         win.mode &= ~MODE_VISIBLE;
 }
 
@@ -1002,6 +1000,7 @@ xdgtoplevelconfigure(void *data, struct xdg_toplevel *toplevel,
 {
     if (w == win.w && h == win.h)
         return;
+
     cresize(w, h);
     if (!wl.configured)
         wl.configured = true;
@@ -1265,10 +1264,9 @@ wlneeddraw(void)
 int
 xstartdraw(void)
 {
-    wld_set_target_buffer(wld.renderer, wld.buffer);
-
-    return 1; // Should be IS_SET(MODE_VISIBLE), but this results in no window.
-    // TODO: Implement proper MODE_VISIBLE handling.
+    if(IS_SET(MODE_VISIBLE))
+        wld_set_target_buffer(wld.renderer, wld.buffer);
+    return IS_SET(MODE_VISIBLE);
 }
 
 void
@@ -1839,7 +1837,6 @@ wlinit(int cols, int rows)
     xloadcols();
     wlloadcursor();
 
-    wl.vis = 0;
     win.h = 2 * borderpx + rows * win.ch;
     win.w = 2 * borderpx + cols * win.cw;
 
@@ -1878,6 +1875,10 @@ run(void)
     wl_display_roundtrip(wl.dpy);
     ttyfd = ttynew(opt_line, shell, opt_io, opt_cmd);
     cresize(win.w, win.h);
+
+    if (!(IS_SET(MODE_VISIBLE)))
+        win.mode |= MODE_VISIBLE;
+
     draw();
 
     clock_gettime(CLOCK_MONOTONIC, &last);
@@ -2014,7 +2015,7 @@ run:
         opt_cmd = argv;
 
     if (!opt_title)
-        opt_title = (opt_line || !opt_cmd) ? "st" : opt_cmd[0];
+        opt_title = (opt_line || !opt_cmd) ? "st-wl" : opt_cmd[0];
 
     setlocale(LC_CTYPE, "");
     cols = MAX(cols, 1);
@@ -2026,4 +2027,3 @@ run:
 
     return 0;
 }
-
