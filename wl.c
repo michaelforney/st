@@ -176,21 +176,9 @@ typedef struct {
     struct timespec last;
 } Repeat;
 
-
-
-/* TODO: Categorize these */
-static void wlselpaste(void);
 static int evcol(int);
 static int evrow(int);
-static int match(uint, uint);
-static char *kmap(xkb_keysym_t, uint);
-static void wlresize(int, int);
-static void wlinit(int, int);
-static void cresize(int, int);
-static void wlloadfonts(char *, double);
-static void wlunloadfonts(void);
 
-static void mousesel(int);
 static void wlmousereport(int, bool, int, int);
 static void wlmousereportbutton(uint32_t, uint32_t);
 static void wlmousereportmotion(wl_fixed_t, wl_fixed_t);
@@ -205,10 +193,13 @@ static void ptrbutton(void *, struct wl_pointer *, uint32_t, uint32_t,
         uint32_t, uint32_t);
 static void ptraxis(void *, struct wl_pointer *, uint32_t, uint32_t,
         wl_fixed_t);
+static void mousesel(int);
+static void wlselpaste(void);
 static void setsel(char*, uint32_t);
 static inline void selwritebuf(char *, int);
 
-/* Keyboard stuff */
+static int match(uint, uint);
+static char *kmap(xkb_keysym_t, uint);
 static void kbdkeymap(void *, struct wl_keyboard *, uint32_t, int32_t,
         uint32_t);
 static void kbdenter(void *, struct wl_keyboard *, uint32_t,
@@ -221,6 +212,8 @@ static void kbdmodifiers(void *, struct wl_keyboard *, uint32_t, uint32_t,
         uint32_t, uint32_t, uint32_t);
 static void kbdrepeatinfo(void *, struct wl_keyboard *, int32_t, int32_t);
 
+static void wlresize(int, int);
+static void cresize(int, int);
 static void surfenter(void *, struct wl_surface *, struct wl_output *);
 static void surfleave(void *, struct wl_surface *, struct wl_output *);
 static void framedone(void *, struct wl_callback *, uint32_t);
@@ -233,6 +226,8 @@ static void wmping(void *, struct xdg_wm_base *, uint32_t);
 static inline uchar sixd_to_8bit(int);
 static int wlloadfont(Font *, FcPattern *);
 static void wlunloadfont(Font *f);
+static void wlloadfonts(char *, double);
+static void wlunloadfonts(void);
 
 static void wlclear(int, int, int, int);
 static void wldraws(char *, Glyph, int, int, int, int);
@@ -258,6 +253,7 @@ static void datasrcsend(void *, struct wl_data_source *, const char *,
         int32_t);
 static void datasrccancelled(void *, struct wl_data_source *);
 
+static void wlinit(int, int);
 static void run(void);
 static void usage(void);
 
@@ -325,13 +321,13 @@ static int oldbutton = 3; /* button event on startup: 3 = release */
 void
 xbell(void)
 {
-    // Do nothing, no bell in wayland.
+    /* Do nothing, no bell in wayland. */
 }
 
 void
 xsetpointermotion(int dummy)
 {
-    // Do nothing, not required under wayland.
+    /* Do nothing, not required under wayland. */
 }
 
 void
@@ -373,148 +369,6 @@ evrow(int y)
     y -= borderpx;
     LIMIT(y, 0, win.th - 1);
     return y / win.ch;
-}
-
-int
-match(uint mask, uint state)
-{
-    return mask == MOD_MASK_ANY || mask == (state & ~ignoremod);
-}
-
-char*
-kmap(xkb_keysym_t k, uint state)
-{
-    Key *kp;
-    int i;
-
-    /* Check for mapped keys out of X11 function keys. */
-    for (i = 0; i < LEN(mappedkeys); i++) {
-        if (mappedkeys[i] == k)
-            break;
-    }
-    if (i == LEN(mappedkeys)) {
-        if ((k & 0xFFFF) < 0xFD00)
-            return NULL;
-    }
-
-    for (kp = key; kp < key + LEN(key); kp++) {
-        if (kp->k != k)
-            continue;
-
-        if (!match(kp->mask, state))
-            continue;
-
-        if (IS_SET(MODE_APPKEYPAD) ? kp->appkey < 0 : kp->appkey > 0)
-            continue;
-        if (IS_SET(MODE_NUMLOCK) && kp->appkey == 2)
-            continue;
-
-        if (IS_SET(MODE_APPCURSOR) ? kp->appcursor < 0 : kp->appcursor > 0)
-            continue;
-
-        return kp->s;
-    }
-
-    return NULL;
-}
-
-void
-cresize(int width, int height)
-{
-    int col, row;
-
-    if (width != 0)
-        win.w = width;
-    if (height != 0)
-        win.h = height;
-
-    col = (win.w - 2 * borderpx) / win.cw;
-    row = (win.h - 2 * borderpx) / win.ch;
-    col = MAX(1, col);
-    row = MAX(1, row);
-
-    tresize(col, row);
-    wlresize(col, row);
-    ttyresize(win.tw, win.th);
-}
-
-void
-zoom(const Arg *arg)
-{
-	Arg larg;
-
-    larg.f = usedfontsize + arg->f;
-    zoomabs(&larg);
-}
-
-void
-zoomabs(const Arg *arg)
-{
-    wlunloadfonts();
-    wlloadfonts(usedfont, arg->f);
-    cresize(0, 0);
-    redraw();
-	/* XXX: Should the window size be updated here because wayland doesn't
-	 *   * have a notion of hints?
-	 *       * xhints(); */
-}
-
-void
-zoomreset(const Arg *arg)
-{
-    Arg larg;
-    if (defaultfontsize > 0) {
-    	larg.f = defaultfontsize;
-        zoomabs(&larg);
-    }
-}
-
-void
-xclipcopy(void)
-{
-	clipcopy(NULL);
-}
-
-void
-clipcopy(const Arg * dummy)
-{
-    // TODO: Implement this!
-}
-
-void
-clippaste(const Arg * dummy)
-{
-    // TODO: Implement this!
-}
-
-void
-selpaste(const Arg * dummy)
-{
-    // TODO: Implement this!
-}
-
-void
-xsetsel(char * buf)
-{
-	setsel(buf, wl.globalserial);
-}
-
-void
-mousesel(int done)
-{
-    int type, seltype = SEL_REGULAR;
-    uint state = wl.xkb.mods & ~forceselmod;
-
-    for (type = 1; type < LEN(selmasks); ++type) {
-        if (match(selmasks[type], state)) {
-            seltype = type;
-            break;
-        }
-    }
-
-    selextend(evcol(wl.px), evrow(wl.py), seltype, done);
-	if (done)
-		setsel(getsel(), wl.globalserial);
 }
 
 void
@@ -707,6 +561,25 @@ ptraxis(void * data, struct wl_pointer * pointer, uint32_t time, uint32_t axis,
 }
 
 void
+mousesel(int done)
+{
+    int type, seltype = SEL_REGULAR;
+    uint state = wl.xkb.mods & ~forceselmod;
+
+    for (type = 1; type < LEN(selmasks); ++type) {
+        if (match(selmasks[type], state)) {
+            seltype = type;
+            break;
+        }
+    }
+
+    selextend(evcol(wl.px), evrow(wl.py), seltype, done);
+	if (done)
+		setsel(getsel(), wl.globalserial);
+}
+
+
+void
 setsel(char *str, uint32_t serial)
 {
     if (!str)
@@ -778,6 +651,80 @@ wlselpaste(void)
             ttywrite("\033[201~", 6, 0);
     }
 }
+
+void
+xclipcopy(void)
+{
+	clipcopy(NULL);
+}
+
+void
+clipcopy(const Arg * dummy)
+{
+    setsel(getsel(), wl.globalserial);
+}
+
+void
+clippaste(const Arg * dummy)
+{
+    wlselpaste();
+}
+
+void
+selpaste(const Arg * dummy)
+{
+    wlselpaste();
+}
+
+void
+xsetsel(char * buf)
+{
+	setsel(buf, wl.globalserial);
+}
+
+int
+match(uint mask, uint state)
+{
+    return mask == MOD_MASK_ANY || mask == (state & ~ignoremod);
+}
+
+char*
+kmap(xkb_keysym_t k, uint state)
+{
+    Key *kp;
+    int i;
+
+    /* Check for mapped keys out of X11 function keys. */
+    for (i = 0; i < LEN(mappedkeys); i++) {
+        if (mappedkeys[i] == k)
+            break;
+    }
+    if (i == LEN(mappedkeys)) {
+        if ((k & 0xFFFF) < 0xFD00)
+            return NULL;
+    }
+
+    for (kp = key; kp < key + LEN(key); kp++) {
+        if (kp->k != k)
+            continue;
+
+        if (!match(kp->mask, state))
+            continue;
+
+        if (IS_SET(MODE_APPKEYPAD) ? kp->appkey < 0 : kp->appkey > 0)
+            continue;
+        if (IS_SET(MODE_NUMLOCK) && kp->appkey == 2)
+            continue;
+
+        if (IS_SET(MODE_APPCURSOR) ? kp->appcursor < 0 : kp->appcursor > 0)
+            continue;
+
+        return kp->s;
+    }
+
+    return NULL;
+}
+
 
 void
 kbdkeymap(void *data, struct wl_keyboard *keyboard, uint32_t format,
@@ -941,6 +888,58 @@ kbdrepeatinfo(void *data, struct wl_keyboard *keyboard, int32_t rate,
     keyrepeatdelay = delay;
     keyrepeatinterval = 1000 / rate;
 }
+
+void
+cresize(int width, int height)
+{
+    int col, row;
+
+    if (width != 0)
+        win.w = width;
+    if (height != 0)
+        win.h = height;
+
+    col = (win.w - 2 * borderpx) / win.cw;
+    row = (win.h - 2 * borderpx) / win.ch;
+    col = MAX(1, col);
+    row = MAX(1, row);
+
+    tresize(col, row);
+    wlresize(col, row);
+    ttyresize(win.tw, win.th);
+}
+
+void
+zoom(const Arg *arg)
+{
+	Arg larg;
+
+    larg.f = usedfontsize + arg->f;
+    zoomabs(&larg);
+}
+
+void
+zoomabs(const Arg *arg)
+{
+    wlunloadfonts();
+    wlloadfonts(usedfont, arg->f);
+    cresize(0, 0);
+    redraw();
+	/* XXX: Should the window size be updated here because wayland doesn't
+	 *   * have a notion of hints?
+	 *       * xhints(); */
+}
+
+void
+zoomreset(const Arg *arg)
+{
+    Arg larg;
+    if (defaultfontsize > 0) {
+    	larg.f = defaultfontsize;
+        zoomabs(&larg);
+    }
+}
+
 
 void
 wlresize(int col, int row)
@@ -1539,9 +1538,6 @@ wldraws(char *s, Glyph base, int x, int y, int charlen, int bytelen)
             if (frclen >= frccap) {
                 frccap += 16;
                 frc = xrealloc(frc, frccap * sizeof(Fontcache));
-                // frclen = LEN(frc) - 1;
-                // wld_font_close(frc[frclen].font);
-                // frc[frclen].unicodep = 0;
             }
 
             frc[frclen].font = wld_font_open_pattern(wld.fontctx,

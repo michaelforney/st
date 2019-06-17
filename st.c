@@ -2577,12 +2577,12 @@ draw(void)
 			term.ocx, term.ocy, term.line[term.ocy][term.ocx]);
 	term.ocx = cx, term.ocy = term.c.y;
 	xfinishdraw();
-	// xximspot(term.ocx, term.ocy); // disabled in wayland brach
+	/* xximspot(term.ocx, term.ocy); */ /* disabled in wayland brach */
 }
 
 void
 redraw(void)
 {
 	tfulldirt();
-	// draw(); // disabled in wayland branch
+	/* draw();*/ /* Disabled in wayland */
 }
