@@ -3421,6 +3421,7 @@ wlinit(void)
 
 	wl.xkb.ctx = xkb_context_new(0);
 	wlresettitle();
+	wl_surface_commit(wl.surface);
 }
 
 /*
